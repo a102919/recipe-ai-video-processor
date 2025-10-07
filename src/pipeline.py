@@ -17,10 +17,39 @@ from video_utils import get_video_metadata
 logger = logging.getLogger(__name__)
 
 
+def calculate_optimal_frame_count(duration_seconds: int) -> int:
+    """
+    Calculate optimal frame count based on video duration
+
+    Strategy: Balance accuracy and cost by adjusting frame density
+    - Short videos (<5 min): 12 frames (every ~25s)
+    - Medium videos (5-10 min): 18 frames (every ~30s)
+    - Medium-long videos (10-15 min): 24 frames (every ~35s)
+    - Long videos (>15 min): 36 frames (every ~40-50s, max to control cost)
+
+    Args:
+        duration_seconds: Video duration in seconds
+
+    Returns:
+        Optimal frame count
+    """
+    if duration_seconds < 300:  # <5 minutes
+        return 12
+    elif duration_seconds < 600:  # <10 minutes
+        return 18
+    elif duration_seconds < 900:  # <15 minutes
+        return 24
+    else:  # >=15 minutes
+        # For very long videos, cap at 36 frames to control cost
+        # This gives approximately 1 frame per 30-60 seconds
+        return min(36, max(24, duration_seconds // 30))
+
+
 def analyze_recipe_from_url(
     url: str,
     cleanup: bool = True,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    frame_count: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Extract recipe from video URL (end-to-end pipeline)
@@ -36,6 +65,12 @@ def analyze_recipe_from_url(
         url: Video URL (YouTube, etc.)
         cleanup: Remove temporary files after processing (default: True)
         api_key: Gemini API key (optional, uses env var if not provided)
+        frame_count: Number of frames to extract and analyze
+                    If None (default), automatically calculated based on video duration:
+                    - <5 min: 12 frames
+                    - 5-10 min: 18 frames
+                    - 10-15 min: 24 frames
+                    - >15 min: 36 frames (max)
 
     Returns:
         Recipe data dictionary with ingredients, steps, and metadata (tokens, video info)
@@ -66,10 +101,25 @@ def analyze_recipe_from_url(
         logger.info(f"Video file size: {video_file_size} bytes")
         logger.info(f"Video duration: {video_duration}s")
 
+        # Auto-calculate optimal frame count if not specified
+        if frame_count is None:
+            frame_count = calculate_optimal_frame_count(int(video_duration))
+            logger.info(f"Auto-calculated frame count: {frame_count} frames (based on {video_duration}s duration)")
+        else:
+            logger.info(f"Using specified frame count: {frame_count} frames")
+
         # Stage 3: Extract key frames
         logger.info("Stage 2/3: Extracting frames...")
         frames_dir = os.path.join(temp_dir, 'frames')
-        all_frames = extract_key_frames(video_path, frames_dir, count=12)
+        # Set max_frames based on video duration to cover entire video
+        # Use 1fps sampling, so max_frames should match duration
+        max_frames_needed = max(int(video_duration) + 10, 200)  # +10 buffer, min 200
+        all_frames = extract_key_frames(
+            video_path,
+            frames_dir,
+            count=frame_count,
+            max_frames=max_frames_needed
+        )
         logger.info(f"Extracted {len(all_frames)} frames")
 
         if not all_frames:
