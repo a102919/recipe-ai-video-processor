@@ -9,6 +9,12 @@ google-generativeai==0.8.3
 # Image Processing
 Pillow==11.0.0
 
+# Video Processing
+yt-dlp==2024.12.23  # Video downloading
+
+# Cloud Storage (Cloudflare R2)
+boto3==1.35.95  # S3-compatible client for R2
+
 # Environment Variables
 python-dotenv==1.0.1
 

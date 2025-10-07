@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 import yt_dlp
+from thumbnail_generator import proxy_thumbnail_to_r2
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,10 @@ class VideoDownloader:
             f"{filename_prefix}_%(id)s.%(ext)s"
         )
 
-        # yt-dlp options: medium quality, mp4 format, no playlist
+        # yt-dlp options: no playlist, default quality
         # Note: quiet=True causes "Broken pipe" errors with Facebook videos
         ydl_opts = {
-            'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+            # No format specification - use yt-dlp default
             'outtmpl': output_template,
             'noplaylist': True,
             'quiet': False,  # Keep False to prevent broken pipe errors
@@ -75,11 +76,28 @@ class VideoDownloader:
                 if not os.path.exists(video_path):
                     raise Exception(f"Download succeeded but file not found: {video_path}")
 
-                # Extract thumbnail URL from video metadata
+                # Get thumbnail from yt-dlp
                 thumbnail_url = info.get('thumbnail')
 
+                if thumbnail_url:
+                    # Check if thumbnail needs CORS proxy (Instagram, Facebook CDN)
+                    needs_proxy = any(domain in thumbnail_url.lower() for domain in [
+                        'instagram', 'fbcdn', 'cdninstagram'
+                    ])
+
+                    if needs_proxy:
+                        logger.info(f"Thumbnail has CORS restrictions, proxying to R2...")
+                        try:
+                            thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
+                            logger.info(f"Proxied thumbnail URL: {thumbnail_url}")
+                        except Exception as e:
+                            logger.warning(f"R2 proxy failed: {e}, using original URL")
+                    else:
+                        logger.info(f"Thumbnail URL (no proxy needed): {thumbnail_url}")
+                else:
+                    logger.warning("No thumbnail URL found in video metadata")
+
                 logger.info(f"Downloaded video to {video_path}")
-                logger.info(f"Thumbnail URL: {thumbnail_url or 'N/A'}")
                 return (video_path, thumbnail_url)
 
         except yt_dlp.utils.DownloadError as e:
