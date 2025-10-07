@@ -4,6 +4,7 @@ Analyzes cooking video frames to extract structured recipe information
 """
 import os
 import json
+import re
 import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -99,6 +100,14 @@ class RecipeAnalyzer:
             response = self.model.generate_content([self.SYSTEM_PROMPT] + images)
             logger.debug(f"Gemini API response received")
 
+            # Extract usage metadata for cost tracking
+            usage_metadata = {
+                'prompt_tokens': response.usage_metadata.prompt_token_count,
+                'output_tokens': response.usage_metadata.candidates_token_count,
+                'total_tokens': response.usage_metadata.total_token_count
+            }
+            logger.debug(f"Token usage: {usage_metadata}")
+
             # Extract JSON from response
             recipe_data = self._parse_json_response(response.text)
 
@@ -106,7 +115,12 @@ class RecipeAnalyzer:
             self._validate_recipe_data(recipe_data)
 
             logger.info(f"Successfully extracted recipe: {recipe_data.get('name', 'Unknown')}")
-            return recipe_data
+
+            # Return both recipe data and usage metadata
+            return {
+                'recipe': recipe_data,
+                'usage_metadata': usage_metadata
+            }
 
         except Exception as e:
             logger.error(f"Gemini API call failed: {e}")
@@ -127,17 +141,8 @@ class RecipeAnalyzer:
         """
         # Try to extract JSON from response
         # Sometimes Gemini wraps JSON in markdown code blocks
-        text = response_text.strip()
-
-        # Remove markdown code blocks if present
-        if text.startswith('```json'):
-            text = text[7:]  # Remove ```json
-        if text.startswith('```'):
-            text = text[3:]  # Remove ```
-        if text.endswith('```'):
-            text = text[:-3]  # Remove trailing ```
-
-        text = text.strip()
+        # Remove markdown code blocks (```json or ```) using regex
+        text = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text.strip(), flags=re.MULTILINE).strip()
 
         try:
             return json.loads(text)
@@ -187,7 +192,9 @@ def analyze_recipe_from_frames(
         api_key: Gemini API key (optional, uses env var if not provided)
 
     Returns:
-        Parsed recipe data
+        Dictionary containing:
+        - recipe: Parsed recipe data (ingredients, steps, etc.)
+        - usage_metadata: Token usage statistics (prompt_tokens, output_tokens, total_tokens)
     """
     analyzer = RecipeAnalyzer(api_key=api_key)
     return analyzer.analyze_frames(frame_paths)

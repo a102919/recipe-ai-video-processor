@@ -12,6 +12,7 @@ from pathlib import Path
 from downloader import download_video
 from extractor import extract_key_frames
 from analyzer import analyze_recipe_from_frames
+from video_utils import get_video_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ def analyze_recipe_from_url(
     1. Download video from URL
     2. Extract key frames from video
     3. Analyze frames with Gemini Vision
-    4. Return structured recipe data
+    4. Return structured recipe data with cost metadata
     5. Cleanup temporary files (optional)
 
     Args:
@@ -37,7 +38,7 @@ def analyze_recipe_from_url(
         api_key: Gemini API key (optional, uses env var if not provided)
 
     Returns:
-        Recipe data dictionary with ingredients, steps, etc.
+        Recipe data dictionary with ingredients, steps, and metadata (tokens, video info)
 
     Raises:
         ValueError: If URL is invalid or video cannot be processed
@@ -58,24 +59,46 @@ def analyze_recipe_from_url(
         logger.info(f"Video downloaded: {video_path}")
         logger.info(f"Thumbnail URL: {thumbnail_url or 'N/A'}")
 
+        # Get video metadata using FFmpeg
+        metadata = get_video_metadata(video_path)
+        video_file_size = metadata['size']
+        video_duration = metadata['duration']
+        logger.info(f"Video file size: {video_file_size} bytes")
+        logger.info(f"Video duration: {video_duration}s")
+
         # Stage 3: Extract key frames
         logger.info("Stage 2/3: Extracting frames...")
         frames_dir = os.path.join(temp_dir, 'frames')
-        key_frames = extract_key_frames(video_path, frames_dir, count=12)
-        logger.info(f"Extracted {len(key_frames)} key frames")
+        all_frames = extract_key_frames(video_path, frames_dir, count=12)
+        logger.info(f"Extracted {len(all_frames)} frames")
 
-        if not key_frames:
+        if not all_frames:
             raise ValueError("No frames extracted from video")
 
         # Stage 4: Analyze with Gemini Vision
         logger.info("Stage 3/3: Analyzing with Gemini Vision...")
-        recipe_data = analyze_recipe_from_frames(key_frames, api_key=api_key)
-        logger.info(f"Recipe extracted: {recipe_data.get('name', 'Unknown')}")
+        analysis_result = analyze_recipe_from_frames(all_frames, api_key=api_key)
+        recipe_data = analysis_result['recipe']
+        usage_metadata = analysis_result['usage_metadata']
 
-        # Add thumbnail URL to recipe data
+        logger.info(f"Recipe extracted: {recipe_data.get('name', 'Unknown')}")
+        logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+
+        # Add thumbnail URL and metadata to recipe data
         recipe_data['thumbnail_url'] = thumbnail_url
 
-        return recipe_data
+        return {
+            **recipe_data,
+            'metadata': {
+                'gemini_tokens': usage_metadata,
+                'video_info': {
+                    'duration_seconds': video_duration,
+                    'file_size_bytes': video_file_size,
+                    'frames_extracted': len(all_frames),
+                    'frames_analyzed': len(all_frames)
+                }
+            }
+        }
 
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)

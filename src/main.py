@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from extractor import extract_key_frames
 from analyzer import analyze_recipe_from_frames
 from pipeline import analyze_recipe_from_url
+from video_utils import get_video_metadata
 
 load_dotenv()
 
@@ -86,11 +87,11 @@ async def analyze_video(
     2. Extract frames at 1fps using FFmpeg
     3. Select 12 key frames (evenly distributed)
     4. Analyze with Gemini Vision API
-    5. Return structured recipe JSON
+    5. Return structured recipe JSON with cost metadata
     6. Cleanup temp files
 
     Returns:
-        Recipe JSON with name, ingredients, steps, tags, completeness status
+        Recipe JSON with name, ingredients, steps, tags, and metadata (tokens, video info)
     """
     temp_dir = None
     video_path = None
@@ -106,22 +107,46 @@ async def analyze_video(
             shutil.copyfileobj(video.file, f)
         logger.info(f"Saved video: {video_path}")
 
+        # Collect video metadata
+        # Get video metadata using FFmpeg
+        metadata = get_video_metadata(video_path)
+        video_file_size = metadata['size']
+        video_duration = metadata['duration']
+        logger.info(f"Video file size: {video_file_size} bytes")
+        logger.info(f"Video duration: {video_duration}s")
+
         # Extract key frames
         frames_dir = os.path.join(temp_dir, 'frames')
-        key_frames = extract_key_frames(video_path, frames_dir, count=12)
-        logger.info(f"Extracted {len(key_frames)} key frames")
+        all_frames = extract_key_frames(video_path, frames_dir, count=12)
+        logger.info(f"Extracted {len(all_frames)} frames")
 
-        if not key_frames:
+        if not all_frames:
             raise HTTPException(
                 status_code=400,
                 detail="No frames could be extracted from video"
             )
 
         # Analyze with Gemini Vision
-        recipe_data = analyze_recipe_from_frames(key_frames)
-        logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
+        analysis_result = analyze_recipe_from_frames(all_frames)
+        recipe_data = analysis_result['recipe']
+        usage_metadata = analysis_result['usage_metadata']
 
-        return recipe_data
+        logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
+        logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+
+        # Return recipe with metadata
+        return {
+            **recipe_data,
+            'metadata': {
+                'gemini_tokens': usage_metadata,
+                'video_info': {
+                    'duration_seconds': video_duration,
+                    'file_size_bytes': video_file_size,
+                    'frames_extracted': len(all_frames),
+                    'frames_analyzed': len(all_frames)
+                }
+            }
+        }
 
     except Exception as e:
         logger.error(f"Video analysis failed: {str(e)}", exc_info=True)
