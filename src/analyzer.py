@@ -35,16 +35,14 @@ class RecipeAnalyzer:
   "servings": 2,
   "prep_time": 10,
   "cook_time": 20,
-  "tags": ["料理類型", "烹飪方式", "難度等級"],
-  "completeness": "complete"
+  "tags": ["料理類型", "烹飪方式", "難度等級"]
 }
 
 要求：
 1. 食譜名稱必須是繁體中文
 2. 食材必須包含名稱和份量，如果畫面中沒有明確顯示，請標記為 "適量"
 3. 步驟必須按順序排列，包含關鍵的時間和溫度資訊
-4. 如果資訊不完整（例如缺少步驟或食材），將 completeness 設為 "incomplete"
-5. 標籤請從以下分類選擇：中式、日式、韓式、泰式、西式、快炒、燉煮、炸物、烘焙、甜點、簡易、進階
+4. 標籤請從以下分類選擇：中式、日式、韓式、泰式、西式、快炒、燉煮、炸物、烘焙、甜點、簡易、進階
 
 只回傳 JSON，不要其他說明文字。"""
 
@@ -170,12 +168,10 @@ class RecipeAnalyzer:
             raise ValueError("steps must be a list")
 
         if len(data['ingredients']) == 0:
-            logger.warning("Recipe has no ingredients, marking as incomplete")
-            data['completeness'] = 'incomplete'
+            logger.warning("Recipe has no ingredients")
 
         if len(data['steps']) == 0:
-            logger.warning("Recipe has no steps, marking as incomplete")
-            data['completeness'] = 'incomplete'
+            logger.warning("Recipe has no steps")
 
 
 # Convenience function for single-use analysis

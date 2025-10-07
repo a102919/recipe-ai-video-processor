@@ -93,8 +93,7 @@ class TestE2ERecipeExtraction:
                     "duration_minutes": 5
                 }
             ],
-            "servings": 2,
-            "completeness": "complete"
+            "servings": 2
         }
 
         # Execute pipeline
@@ -112,7 +111,6 @@ class TestE2ERecipeExtraction:
         assert recipe["name"] == "測試食譜"
         assert len(recipe["ingredients"]) == 1
         assert len(recipe["steps"]) == 1
-        assert recipe["completeness"] == "complete"
 
     @patch('src.pipeline.download_video')
     def test_pipeline_download_failure(self, mock_download):

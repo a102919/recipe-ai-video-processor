@@ -54,8 +54,7 @@ def valid_recipe_json():
         "servings": 2,
         "prep_time": 7,
         "cook_time": 5,
-        "tags": ["海鮮", "快炒", "簡易"],
-        "completeness": "complete"
+        "tags": ["海鮮", "快炒", "簡易"]
     }
 
 
@@ -92,7 +91,8 @@ class TestRecipeAnalyzer:
         # Setup mock
         mock_model = MagicMock()
         mock_response = MagicMock()
-        mock_response.text = f'```json\n{str(valid_recipe_json).replace("'", '"')}\n```'
+        import json
+        mock_response.text = f'```json\n{json.dumps(valid_recipe_json)}\n```'
         mock_model.generate_content.return_value = mock_response
         mock_model_class.return_value = mock_model
 
@@ -106,7 +106,6 @@ class TestRecipeAnalyzer:
         assert result["name"] == "蒜香奶油蝦"
         assert len(result["ingredients"]) == 3
         assert len(result["steps"]) == 3
-        assert result["completeness"] == "complete"
 
         # Verify API was called with correct number of images
         mock_model.generate_content.assert_called_once()
@@ -178,27 +177,6 @@ class TestRecipeAnalyzer:
 
         with pytest.raises(ValueError, match="Missing required field: ingredients"):
             analyzer._validate_recipe_data(invalid_data)
-
-    def test_validate_recipe_data_empty_ingredients(self, valid_recipe_json):
-        """Test validation marks incomplete when ingredients is empty"""
-        analyzer = RecipeAnalyzer(api_key="test-key")
-        data = valid_recipe_json.copy()
-        data["ingredients"] = []
-
-        analyzer._validate_recipe_data(data)
-
-        assert data["completeness"] == "incomplete"
-
-    def test_validate_recipe_data_empty_steps(self, valid_recipe_json):
-        """Test validation marks incomplete when steps is empty"""
-        analyzer = RecipeAnalyzer(api_key="test-key")
-        data = valid_recipe_json.copy()
-        data["steps"] = []
-
-        analyzer._validate_recipe_data(data)
-
-        assert data["completeness"] == "incomplete"
-
 
 class TestConvenienceFunction:
     """Test convenience function"""
