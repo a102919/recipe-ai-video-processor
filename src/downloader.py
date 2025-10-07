@@ -80,9 +80,9 @@ class VideoDownloader:
                 thumbnail_url = info.get('thumbnail')
 
                 if thumbnail_url:
-                    # Check if thumbnail needs CORS proxy (Instagram, Facebook CDN)
+                    # Check if thumbnail needs CORS proxy (Instagram only)
                     needs_proxy = any(domain in thumbnail_url.lower() for domain in [
-                        'instagram', 'fbcdn', 'cdninstagram'
+                        'instagram', 'cdninstagram'
                     ])
 
                     if needs_proxy:
