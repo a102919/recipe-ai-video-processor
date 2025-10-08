@@ -11,10 +11,10 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-from extractor import extract_key_frames
-from analyzer import analyze_recipe_from_frames
-from pipeline import analyze_recipe_from_url
-from video_utils import get_video_metadata
+from .extractor import extract_key_frames
+from .analyzer import analyze_recipe_from_frames
+from .pipeline import analyze_recipe_from_url
+from .video_utils import get_video_metadata
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure properly in production
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

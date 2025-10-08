@@ -9,10 +9,10 @@ import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from downloader import download_video
-from extractor import extract_key_frames
-from analyzer import analyze_recipe_from_frames
-from video_utils import get_video_metadata
+from .downloader import download_video
+from .extractor import extract_key_frames
+from .analyzer import analyze_recipe_from_frames
+from .video_utils import get_video_metadata
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 import yt_dlp
-from thumbnail_generator import proxy_thumbnail_to_r2
+from .thumbnail_generator import proxy_thumbnail_to_r2
 
 logger = logging.getLogger(__name__)
 
