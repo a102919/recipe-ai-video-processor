@@ -209,10 +209,21 @@ async def analyze_video_from_url(video_url: str = Form(...)):
 
 if __name__ == "__main__":
     import uvicorn
+    import multiprocessing
+
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
 
+    # Calculate workers based on CPU cores (default: 2x CPU cores)
+    # For Zeabur deployment:
+    # - Developer Plan (2 vCPU): default 4 workers
+    # - Team Plan (4 vCPU): default 8 workers
+    cpu_count = multiprocessing.cpu_count()
+    default_workers = cpu_count * 2
+    workers = int(os.getenv("UVICORN_WORKERS", default_workers))
+
     logger.info(f"Starting RecipeAI Video Processor on {host}:{port}")
     logger.info(f"Gemini API key configured: {bool(os.getenv('GEMINI_API_KEY'))}")
+    logger.info(f"CPU cores detected: {cpu_count}, starting {workers} workers")
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, workers=workers)
