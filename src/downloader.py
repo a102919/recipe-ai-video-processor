@@ -66,7 +66,32 @@ class VideoDownloader:
                 with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
                     f.write(cookies_env)
                     cookie_file = f.name
-                logger.info("Using Instagram cookies from environment variable")
+
+                # Debug: Validate cookies file content
+                cookie_lines = cookies_env.strip().split('\n')
+                has_netscape_header = cookie_lines[0].startswith('# Netscape HTTP Cookie File')
+                cookie_names = []
+                for line in cookie_lines:
+                    if not line.startswith('#') and line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 6:
+                            cookie_names.append(parts[5])  # Cookie name is 6th field
+
+                logger.info(f"Using Instagram cookies from environment variable")
+                logger.info(f"Cookies validation: Netscape header={has_netscape_header}, "
+                           f"Cookie count={len(cookie_names)}, "
+                           f"Cookie names={cookie_names[:5]}")  # Show first 5 cookie names
+
+                # Check for critical cookies
+                critical_cookies = {'sessionid', 'csrftoken', 'ds_user_id'}
+                found_critical = critical_cookies.intersection(set(cookie_names))
+                missing_critical = critical_cookies - found_critical
+
+                if missing_critical:
+                    logger.warning(f"Missing critical cookies: {missing_critical}")
+                else:
+                    logger.info("All critical cookies present ✓")
+
             except Exception as e:
                 logger.warning(f"Failed to create cookies file: {e}")
 
