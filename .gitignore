@@ -141,3 +141,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 .cache/
+
+# Secrets (Instagram cookies, etc.)
+*cookies*.txt
+secrets/

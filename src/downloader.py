@@ -4,6 +4,7 @@ Downloads cooking videos from various platforms for recipe extraction
 """
 import os
 import logging
+import tempfile
 from pathlib import Path
 from typing import Optional
 import yt_dlp
@@ -55,6 +56,20 @@ class VideoDownloader:
             f"{filename_prefix}_%(id)s.%(ext)s"
         )
 
+        # Prepare cookies from environment variable (if configured)
+        cookie_file = None
+        cookies_env = os.getenv('INSTAGRAM_COOKIES')
+
+        if cookies_env:
+            try:
+                # Create temporary cookies file from environment variable
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+                    f.write(cookies_env)
+                    cookie_file = f.name
+                logger.info("Using Instagram cookies from environment variable")
+            except Exception as e:
+                logger.warning(f"Failed to create cookies file: {e}")
+
         # yt-dlp options: no playlist, default quality
         # Note: quiet=True causes "Broken pipe" errors with Facebook videos
         ydl_opts = {
@@ -63,7 +78,13 @@ class VideoDownloader:
             'noplaylist': True,
             'quiet': False,  # Keep False to prevent broken pipe errors
             'no_warnings': True,  # Hide warnings for cleaner output
+            'sleep_interval': 3,  # Wait 3 seconds between downloads to avoid rate limits
+            'max_sleep_interval': 10,  # Maximum sleep interval if needed
         }
+
+        # Add cookies file if available
+        if cookie_file:
+            ydl_opts['cookiefile'] = cookie_file
 
         # Internal function with retry logic for rate limit handling
         @retry(
@@ -122,16 +143,35 @@ class VideoDownloader:
             error_msg = str(e)
             # Provide helpful error messages based on error type
             if 'rate-limit' in error_msg.lower() or 'login required' in error_msg.lower():
+                # Build helpful error message with configuration hints
+                cookies_hint = ""
+                if not cookies_env:
+                    cookies_hint = (
+                        "\n\nTo fix this issue, configure Instagram cookies:\n"
+                        "1. Export cookies from your browser (see INSTAGRAM_COOKIES_SETUP.md)\n"
+                        "2. Set INSTAGRAM_COOKIES environment variable in Zeabur\n"
+                        "3. Redeploy the service"
+                    )
+
                 raise ValueError(
                     f"Failed to download video after 4 attempts due to rate limiting. "
                     f"Instagram/Facebook may have temporarily blocked requests from this IP. "
-                    f"Please try again in a few minutes. Original error: {e}"
+                    f"Please try again in a few minutes.{cookies_hint}\n\n"
+                    f"Original error: {e}"
                 )
             else:
                 raise ValueError(f"Failed to download video: {e}")
         except Exception as e:
             logger.error(f"Unexpected error during download: {e}")
             raise
+        finally:
+            # Clean up temporary cookies file
+            if cookie_file and os.path.exists(cookie_file):
+                try:
+                    os.unlink(cookie_file)
+                    logger.debug(f"Cleaned up temporary cookies file: {cookie_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup cookies file: {e}")
 
 
 # Convenience function for single-use download
