@@ -12,98 +12,123 @@ ERROR: [Instagram] rate-limit reached or login required
 
 ---
 
+## 🆕 新架構：Cookies 自動從 R2 讀取
+
+**好消息！** 現在 cookies 會自動從 R2 讀取，無需配置環境變數！
+
+**Cookies 位置**：
+```
+https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt
+```
+
+**優點**：
+- ✅ 更新 cookies 不需要重啟服務
+- ✅ 無需配置 Zeabur 環境變數
+- ✅ 無環境變數大小限制
+- ✅ 更容易管理和更新
+
+---
+
 ## 步驟 1：獲取 Cookies（本地操作）
 
-### 方法 A：使用 Chrome 擴展（最簡單）✅
-
-1. **安裝擴展**
-   - Chrome: [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-   - Edge: 搜索同名擴展
-
-2. **登入 Instagram**
-   - 在瀏覽器打開 [instagram.com](https://instagram.com)
-   - 登入你的帳號（建議使用測試帳號）
-
-3. **導出 Cookies**
-   - 停留在任意 Instagram 頁面
-   - 點擊擴展圖標
-   - 選擇 "Export" → 選擇 "instagram.com"
-   - 保存為 `instagram_cookies.txt`
-
-### 方法 B：使用 Firefox 擴展
-
-1. **安裝擴展**
-   - [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-
-2. **導出 Cookies**
-   - 登入 Instagram
-   - 點擊擴展圖標
-   - "Export cookies for instagram.com"
-   - 保存文件
-
-### 方法 C：使用 yt-dlp 命令（進階）
+**推薦方法：使用 yt-dlp 直接提取** ⭐
 
 ```bash
-# 自動從 Chrome 提取 Instagram cookies
-yt-dlp --cookies-from-browser chrome --cookies instagram_cookies.txt "https://www.instagram.com/"
+# 1. 確保已在 Chrome 登入 Instagram（使用測試帳號）
+
+# 2. 在 video-processor 目錄執行
+cd /Users/alan/code/RecipeAI/video-processor
+
+# 3. 從 Chrome 提取 cookies
+yt-dlp --cookies-from-browser chrome --cookies instagram_cookies_only.txt "https://www.instagram.com/"
+
+# 4. 檢查提取的 cookies（應該有 10+ 行）
+cat instagram_cookies_only.txt | wc -l
+
+# 5. 驗證關鍵 cookies 存在
+grep -E "(sessionid|csrftoken|ds_user_id)" instagram_cookies_only.txt
+```
+
+**預期輸出**：
+```
+Extracted 3260 cookies from chrome
+✅ 應該看到 sessionid, csrftoken, ds_user_id 三個關鍵 cookies
 ```
 
 ---
 
-## 步驟 2：配置到 Zeabur（線上環境）
+## 步驟 2：上傳到 R2
 
-### 2.1 準備 Cookies 內容
-
-在本地終端執行：
+上傳 cookies 文件到 R2（自動被服務使用）：
 
 ```bash
-cat instagram_cookies.txt
+# 確保在 video-processor 目錄
+cd /Users/alan/code/RecipeAI/video-processor
+
+# 創建上傳腳本（如果沒有）
+cat > upload_cookies.py << 'EOF'
+import boto3
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / '.env')
+
+r2_client = boto3.client(
+    's3',
+    endpoint_url=f"https://{os.getenv('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
+    aws_access_key_id=os.getenv('R2_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('R2_SECRET_ACCESS_KEY'),
+    region_name='auto'
+)
+
+with open('instagram_cookies_only.txt', 'rb') as f:
+    r2_client.put_object(
+        Bucket=os.getenv('R2_BUCKET_NAME'),
+        Key='thumbnails/www.instagram.com_cookies.txt',
+        Body=f,
+        ContentType='text/plain'
+    )
+
+print("✅ Uploaded to R2: https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt")
+EOF
+
+# 執行上傳
+python3 upload_cookies.py
 ```
 
-**複製整個文件內容**，應該類似：
-
+**預期輸出**：
 ```
-# Netscape HTTP Cookie File
-.instagram.com	TRUE	/	TRUE	1735689600	sessionid	12345678%3Aabcdefg
-.instagram.com	TRUE	/	FALSE	1735689600	csrftoken	xyzABC123
-.instagram.com	TRUE	/	FALSE	1735689600	ds_user_id	987654321
+✅ Uploaded to R2: https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt
 ```
-
-### 2.2 在 Zeabur 設置環境變量
-
-1. 打開 Zeabur Dashboard
-2. 選擇你的 `video-processor` 服務
-3. 進入 "Variables" (環境變量) 設置
-4. 添加新變量：
-   - **變量名**：`INSTAGRAM_COOKIES`
-   - **變量值**：貼上步驟 2.1 複製的內容
-5. 保存並重啟服務
-
-### 2.3 驗證配置
-
-檢查日志中是否出現：
-
-```
-INFO:src.downloader:Using Instagram cookies from environment variable
-```
-
-如果出現，說明配置成功！
 
 ---
 
-## 步驟 3：測試
+## 步驟 3：驗證（無需重啟服務！）
 
-發送測試請求：
+Cookies 會在**下次請求時自動載入**，無需重啟 Zeabur 服務！
+
+**測試方法**：
 
 ```bash
+# 發送測試請求（替換為你的 Zeabur URL）
 curl -X POST https://your-zeabur-url.zeabur.app/analyze-from-url \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://www.instagram.com/reel/DOd79NzEr9f/"}'
+  -d '{"url":"https://www.instagram.com/reel/DPYq1HMiWzp/"}'
+```
+
+**檢查日誌**：
+```
+INFO:src.downloader:Downloading Instagram cookies from R2...
+INFO:src.downloader:Using Instagram cookies from R2
+INFO:src.downloader:Cookies validation: Netscape header=True, Cookie count=14, Cookie names=[...]
+INFO:src.downloader:All critical cookies present ✓
 ```
 
 **預期結果**：
 - ✅ 不再出現 rate-limit 錯誤
 - ✅ 連續下載多個視頻都成功
+- ✅ 無需重啟服務
 
 ---
 
@@ -114,18 +139,25 @@ curl -X POST https://your-zeabur-url.zeabur.app/analyze-from-url \
 當你看到錯誤：
 
 ```
-ERROR: [Instagram] Unable to extract ... (cookies expired)
+ERROR: [Instagram] rate-limit reached or login required
+WARNING: The cookies from R2 may have expired
 ```
 
 或者距離上次設置已超過 **1-3 個月**。
 
-### 如何更新？
+### 如何更新？（超簡單！）
 
-1. 重複「步驟 1：獲取 Cookies」
-2. 在 Zeabur 更新 `INSTAGRAM_COOKIES` 環境變量
-3. 重啟服務
+```bash
+# 1. 提取新的 cookies
+yt-dlp --cookies-from-browser chrome --cookies instagram_cookies_only.txt "https://www.instagram.com/"
 
-**建議**：設置日曆提醒，每月檢查一次。
+# 2. 上傳到 R2
+python3 upload_cookies.py
+
+# 3. 完成！無需重啟服務
+```
+
+**建議**：設置日曆提醒，每 1-2 個月更新一次。
 
 ---
 
@@ -153,75 +185,74 @@ ERROR: [Instagram] Unable to extract ... (cookies expired)
 
 ### 問題 1：仍然出現 rate-limit 錯誤
 
-**可能原因**：
-- Cookies 格式不正確
-- Cookies 已過期
-- Instagram 帳號被封鎖
+**症狀**：
+```
+ERROR: [Instagram] rate-limit reached or login required
+```
 
 **解決方案**：
-1. 重新導出 cookies（確保完整複製）
-2. 檢查 Instagram 帳號是否正常登入
-3. 嘗試用不同 Instagram 帳號
+```bash
+# 1. 檢查 R2 cookies 是否可訪問
+curl https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt
 
-### 問題 2：日志沒有顯示 "Using Instagram cookies"
+# 2. 驗證 cookies 包含關鍵字段
+curl -s https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt | grep sessionid
+
+# 3. 如果 cookies 過期，重新提取並上傳（見「維護：更新 Cookies」）
+```
+
+### 問題 2：日志顯示 "Failed to download cookies from R2"
 
 **可能原因**：
-- 環境變量名稱錯誤（必須是 `INSTAGRAM_COOKIES`）
-- 環境變量未保存
-- 服務未重啟
+- R2 URL 無法訪問
+- 網路問題
 
 **解決方案**：
-1. 確認變量名拼寫正確
-2. 在 Zeabur Dashboard 檢查變量是否存在
-3. 重啟服務
+```bash
+# 檢查 R2 連線
+curl -I https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt
 
-### 問題 3：Cookies 文件格式錯誤
+# 應該返回 HTTP/2 200
+```
+
+### 問題 3：日志顯示 "Missing critical cookies"
 
 **症狀**：
 ```
-WARNING:src.downloader:Failed to create cookies file: ...
+WARNING:src.downloader:Missing critical cookies: {'sessionid'}
 ```
 
 **解決方案**：
-- 確保使用 Netscape 格式（瀏覽器擴展自動生成）
-- 檢查文件開頭是否有 `# Netscape HTTP Cookie File`
-- 重新導出 cookies
-
----
-
-## 替代方案
-
-如果 cookies 方案不適合你，可以考慮：
-
-### 方案 B：增加請求間隔
-已經實作了 `sleep_interval: 3` 秒，可以增加到 10 秒：
-
-```python
-'sleep_interval': 10,
-'max_sleep_interval': 30,
-```
-
-### 方案 C：使用 Proxy
-需要付費 proxy 服務（不推薦）。
+重新提取 cookies，確保：
+1. Chrome 已登入 Instagram
+2. 在 Instagram 頁面停留並刷新一次
+3. 重新執行 yt-dlp 命令提取 cookies
 
 ---
 
 ## 總結
 
-**最佳實踐流程：**
+**🚀 新流程（R2 自動載入）：**
 ```
-1. 創建測試 Instagram 帳號
+1. 創建測試 Instagram 帳號並登入 Chrome
    ↓
-2. 用擴展導出 cookies.txt
+2. 本地提取 cookies（yt-dlp --cookies-from-browser）
    ↓
-3. 設置 Zeabur 環境變量 INSTAGRAM_COOKIES
+3. 上傳到 R2（python3 upload_cookies.py）
    ↓
-4. 重啟服務
+4. 完成！服務自動使用新 cookies（無需重啟）
    ↓
-5. 每 1-2 個月更新一次
+5. 每 1-2 個月重複步驟 2-3 更新
 ```
 
-**預期效果：**
+**✨ 優點：**
 - ✅ 可以連續下載多個 Instagram 視頻
 - ✅ 不再頻繁遇到 rate-limit 錯誤
-- ✅ 更穩定的下載成功率
+- ✅ 更新 cookies 無需重啟服務
+- ✅ 無需配置 Zeabur 環境變數
+- ✅ 更容易管理和維護
+
+**📊 成本：**
+- R2 存儲：免費（2KB 文件）
+- R2 流量：極低（每次請求下載一次 cookies）
+- 維護時間：每月 2 分鐘
