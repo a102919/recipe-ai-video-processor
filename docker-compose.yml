@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  video-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: recipeai-video-processor
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Override specific settings for local development
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Optional: mount source for live development
+    # volumes:
+    #   - ./src:/app/src
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
