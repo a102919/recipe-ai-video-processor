@@ -5,6 +5,7 @@ Downloads cooking videos from various platforms for recipe extraction
 import os
 import logging
 import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Optional
 import yt_dlp
@@ -56,44 +57,48 @@ class VideoDownloader:
             f"{filename_prefix}_%(id)s.%(ext)s"
         )
 
-        # Prepare cookies from environment variable (if configured)
+        # Prepare cookies from R2 URL (if configured)
         cookie_file = None
-        cookies_env = os.getenv('INSTAGRAM_COOKIES')
+        cookies_url = "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt"
 
-        if cookies_env:
-            try:
-                # Create temporary cookies file from environment variable
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                    f.write(cookies_env)
-                    cookie_file = f.name
+        try:
+            # Download cookies from R2
+            logger.info(f"Downloading Instagram cookies from R2...")
+            with urllib.request.urlopen(cookies_url) as response:
+                cookies_content = response.read().decode('utf-8')
 
-                # Debug: Validate cookies file content
-                cookie_lines = cookies_env.strip().split('\n')
-                has_netscape_header = cookie_lines[0].startswith('# Netscape HTTP Cookie File')
-                cookie_names = []
-                for line in cookie_lines:
-                    if not line.startswith('#') and line.strip():
-                        parts = line.split('\t')
-                        if len(parts) >= 6:
-                            cookie_names.append(parts[5])  # Cookie name is 6th field
+            # Create temporary cookies file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+                f.write(cookies_content)
+                cookie_file = f.name
 
-                logger.info(f"Using Instagram cookies from environment variable")
-                logger.info(f"Cookies validation: Netscape header={has_netscape_header}, "
-                           f"Cookie count={len(cookie_names)}, "
-                           f"Cookie names={cookie_names[:5]}")  # Show first 5 cookie names
+            # Debug: Validate cookies file content
+            cookie_lines = cookies_content.strip().split('\n')
+            has_netscape_header = cookie_lines[0].startswith('# Netscape HTTP Cookie File')
+            cookie_names = []
+            for line in cookie_lines:
+                if not line.startswith('#') and line.strip():
+                    parts = line.split('\t')
+                    if len(parts) >= 6:
+                        cookie_names.append(parts[5])  # Cookie name is 6th field
 
-                # Check for critical cookies
-                critical_cookies = {'sessionid', 'csrftoken', 'ds_user_id'}
-                found_critical = critical_cookies.intersection(set(cookie_names))
-                missing_critical = critical_cookies - found_critical
+            logger.info(f"Using Instagram cookies from R2")
+            logger.info(f"Cookies validation: Netscape header={has_netscape_header}, "
+                       f"Cookie count={len(cookie_names)}, "
+                       f"Cookie names={cookie_names[:5]}")  # Show first 5 cookie names
 
-                if missing_critical:
-                    logger.warning(f"Missing critical cookies: {missing_critical}")
-                else:
-                    logger.info("All critical cookies present ✓")
+            # Check for critical cookies
+            critical_cookies = {'sessionid', 'csrftoken', 'ds_user_id'}
+            found_critical = critical_cookies.intersection(set(cookie_names))
+            missing_critical = critical_cookies - found_critical
 
-            except Exception as e:
-                logger.warning(f"Failed to create cookies file: {e}")
+            if missing_critical:
+                logger.warning(f"Missing critical cookies: {missing_critical}")
+            else:
+                logger.info("All critical cookies present ✓")
+
+        except Exception as e:
+            logger.warning(f"Failed to download/create cookies file from R2: {e}")
 
         # yt-dlp options: no playlist, default quality
         # Note: quiet=True causes "Broken pipe" errors with Facebook videos
@@ -168,20 +173,11 @@ class VideoDownloader:
             error_msg = str(e)
             # Provide helpful error messages based on error type
             if 'rate-limit' in error_msg.lower() or 'login required' in error_msg.lower():
-                # Build helpful error message with configuration hints
-                cookies_hint = ""
-                if not cookies_env:
-                    cookies_hint = (
-                        "\n\nTo fix this issue, configure Instagram cookies:\n"
-                        "1. Export cookies from your browser (see INSTAGRAM_COOKIES_SETUP.md)\n"
-                        "2. Set INSTAGRAM_COOKIES environment variable in Zeabur\n"
-                        "3. Redeploy the service"
-                    )
-
                 raise ValueError(
                     f"Failed to download video after 4 attempts due to rate limiting. "
-                    f"Instagram/Facebook may have temporarily blocked requests from this IP. "
-                    f"Please try again in a few minutes.{cookies_hint}\n\n"
+                    f"Instagram/Facebook may have temporarily blocked requests. "
+                    f"The cookies from R2 may have expired. Please update the cookies file at:\n"
+                    f"{cookies_url}\n\n"
                     f"Original error: {e}"
                 )
             else:
