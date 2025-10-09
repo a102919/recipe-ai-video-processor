@@ -7,6 +7,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 import yt_dlp
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log
+)
 from .thumbnail_generator import proxy_thumbnail_to_r2
 
 logger = logging.getLogger(__name__)
@@ -27,10 +34,10 @@ class VideoDownloader:
 
     def download(self, url: str, filename_prefix: str = "video") -> tuple[str, Optional[str]]:
         """
-        Download video from URL
+        Download video from URL with automatic retry on transient failures
 
         Args:
-            url: Video URL (YouTube, etc.)
+            url: Video URL (YouTube, Instagram, etc.)
             filename_prefix: Prefix for output filename
 
         Returns:
@@ -38,7 +45,7 @@ class VideoDownloader:
 
         Raises:
             ValueError: If URL is invalid or unsupported
-            Exception: If download fails
+            Exception: If download fails after all retries
         """
         if not url or not url.startswith(('http://', 'https://')):
             raise ValueError(f"Invalid URL: {url}")
@@ -58,7 +65,16 @@ class VideoDownloader:
             'no_warnings': True,  # Hide warnings for cleaner output
         }
 
-        try:
+        # Internal function with retry logic for rate limit handling
+        @retry(
+            stop=stop_after_attempt(4),  # 1 original + 3 retries
+            wait=wait_exponential(multiplier=2, min=2, max=10),  # 2s, 4s, 8s
+            retry=retry_if_exception_type(yt_dlp.utils.DownloadError),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+            reraise=True
+        )
+        def _download_with_retry():
+            """Internal function that performs actual download with retry"""
             logger.info(f"Downloading video from {url}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -100,9 +116,19 @@ class VideoDownloader:
                 logger.info(f"Downloaded video to {video_path}")
                 return (video_path, thumbnail_url)
 
+        try:
+            return _download_with_retry()
         except yt_dlp.utils.DownloadError as e:
-            logger.error(f"Download failed: {e}")
-            raise ValueError(f"Failed to download video: {e}")
+            error_msg = str(e)
+            # Provide helpful error messages based on error type
+            if 'rate-limit' in error_msg.lower() or 'login required' in error_msg.lower():
+                raise ValueError(
+                    f"Failed to download video after 4 attempts due to rate limiting. "
+                    f"Instagram/Facebook may have temporarily blocked requests from this IP. "
+                    f"Please try again in a few minutes. Original error: {e}"
+                )
+            else:
+                raise ValueError(f"Failed to download video: {e}")
         except Exception as e:
             logger.error(f"Unexpected error during download: {e}")
             raise
