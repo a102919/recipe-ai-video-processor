@@ -34,6 +34,26 @@ class VideoDownloader:
         self.output_dir = output_dir or os.path.join(os.getcwd(), 'downloads')
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
+    def _detect_platform(self, url: str) -> str:
+        """
+        Detect video platform from URL
+
+        Args:
+            url: Video URL
+
+        Returns:
+            Platform name ('youtube', 'instagram', 'facebook', 'other')
+        """
+        url_lower = url.lower()
+        if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+            return 'youtube'
+        elif 'instagram.com' in url_lower:
+            return 'instagram'
+        elif 'facebook.com' in url_lower or 'fb.watch' in url_lower:
+            return 'facebook'
+        else:
+            return 'other'
+
     def download(self, url: str, filename_prefix: str = "video") -> tuple[str, Optional[str]]:
         """
         Download video from URL with automatic retry on transient failures
@@ -57,55 +77,70 @@ class VideoDownloader:
             f"{filename_prefix}_%(id)s.%(ext)s"
         )
 
-        # Prepare cookies from R2 URL (if configured)
+        # Detect platform and prepare appropriate cookies from R2
         cookie_file = None
-        # Fixed R2 public URL (this bucket has public access enabled)
-        cookies_url = "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt"
+        platform = self._detect_platform(url)
 
-        try:
-            # Download cookies from R2
-            logger.info(f"Downloading Instagram cookies from R2...")
+        # Platform-specific cookies URLs (R2 public bucket)
+        cookies_mapping = {
+            'instagram': "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt",
+            'youtube': "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.youtube.com_cookies.txt",
+        }
 
-            # Create request with User-Agent to avoid Cloudflare blocking
-            req = urllib.request.Request(
-                cookies_url,
-                headers={'User-Agent': 'RecipeAI-VideoProcessor/1.0'}
-            )
-            with urllib.request.urlopen(req) as response:
-                cookies_content = response.read().decode('utf-8')
+        cookies_url = cookies_mapping.get(platform)
+        if not cookies_url:
+            logger.info(f"No cookies configured for platform: {platform}")
+        else:
+            try:
+                # Download cookies from R2
+                logger.info(f"Downloading {platform.title()} cookies from R2...")
 
-            # Create temporary cookies file
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                f.write(cookies_content)
-                cookie_file = f.name
+                # Create request with User-Agent to avoid Cloudflare blocking
+                req = urllib.request.Request(
+                    cookies_url,
+                    headers={'User-Agent': 'RecipeAI-VideoProcessor/1.0'}
+                )
+                with urllib.request.urlopen(req) as response:
+                    cookies_content = response.read().decode('utf-8')
 
-            # Debug: Validate cookies file content
-            cookie_lines = cookies_content.strip().split('\n')
-            has_netscape_header = cookie_lines[0].startswith('# Netscape HTTP Cookie File')
-            cookie_names = []
-            for line in cookie_lines:
-                if not line.startswith('#') and line.strip():
-                    parts = line.split('\t')
-                    if len(parts) >= 6:
-                        cookie_names.append(parts[5])  # Cookie name is 6th field
+                # Create temporary cookies file
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+                    f.write(cookies_content)
+                    cookie_file = f.name
 
-            logger.info(f"Using Instagram cookies from R2")
-            logger.info(f"Cookies validation: Netscape header={has_netscape_header}, "
-                       f"Cookie count={len(cookie_names)}, "
-                       f"Cookie names={cookie_names[:5]}")  # Show first 5 cookie names
+                # Debug: Validate cookies file content
+                cookie_lines = cookies_content.strip().split('\n')
+                has_netscape_header = cookie_lines[0].startswith('# Netscape HTTP Cookie File')
+                cookie_names = []
+                for line in cookie_lines:
+                    if not line.startswith('#') and line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 6:
+                            cookie_names.append(parts[5])  # Cookie name is 6th field
 
-            # Check for critical cookies
-            critical_cookies = {'sessionid', 'csrftoken', 'ds_user_id'}
-            found_critical = critical_cookies.intersection(set(cookie_names))
-            missing_critical = critical_cookies - found_critical
+                logger.info(f"Using {platform.title()} cookies from R2")
+                logger.info(f"Cookies validation: Netscape header={has_netscape_header}, "
+                           f"Cookie count={len(cookie_names)}, "
+                           f"Cookie names={cookie_names[:5]}")  # Show first 5 cookie names
 
-            if missing_critical:
-                logger.warning(f"Missing critical cookies: {missing_critical}")
-            else:
-                logger.info("All critical cookies present ✓")
+                # Platform-specific critical cookies validation
+                critical_cookies_map = {
+                    'instagram': {'sessionid', 'csrftoken', 'ds_user_id'},
+                    'youtube': {'VISITOR_INFO1_LIVE', 'CONSENT', 'PREF'},  # YouTube cookies may vary
+                }
+                critical_cookies = critical_cookies_map.get(platform, set())
 
-        except Exception as e:
-            logger.warning(f"Failed to download/create cookies file from R2: {e}")
+                if critical_cookies:
+                    found_critical = critical_cookies.intersection(set(cookie_names))
+                    missing_critical = critical_cookies - found_critical
+
+                    if missing_critical:
+                        logger.warning(f"Missing some critical cookies: {missing_critical}")
+                    else:
+                        logger.info("All critical cookies present ✓")
+
+            except Exception as e:
+                logger.warning(f"Failed to download/create cookies file from R2: {e}")
 
         # yt-dlp options: no playlist, default quality
         # Note: quiet=True causes "Broken pipe" errors with Facebook videos
