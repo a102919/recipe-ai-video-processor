@@ -59,12 +59,19 @@ class VideoDownloader:
 
         # Prepare cookies from R2 URL (if configured)
         cookie_file = None
+        # Fixed R2 public URL (this bucket has public access enabled)
         cookies_url = "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt"
 
         try:
             # Download cookies from R2
             logger.info(f"Downloading Instagram cookies from R2...")
-            with urllib.request.urlopen(cookies_url) as response:
+
+            # Create request with User-Agent to avoid Cloudflare blocking
+            req = urllib.request.Request(
+                cookies_url,
+                headers={'User-Agent': 'RecipeAI-VideoProcessor/1.0'}
+            )
+            with urllib.request.urlopen(req) as response:
                 cookies_content = response.read().decode('utf-8')
 
             # Create temporary cookies file
