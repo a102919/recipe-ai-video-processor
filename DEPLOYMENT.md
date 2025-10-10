@@ -168,7 +168,7 @@ services:
 2. **检查运行日志**
    ```
    应该看到：
-   - "Starting RecipeAI Video Processor on 0.0.0.0:8000"
+   - "Starting 愛煮小幫手 Video Processor on 0.0.0.0:8000"
    - "Gemini API key configured: True"
    - "CPU cores detected: X, starting Y workers"
    ```

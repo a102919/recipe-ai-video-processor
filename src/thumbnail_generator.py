@@ -21,14 +21,14 @@ class ThumbnailProxy:
 
     def __init__(self):
         """Initialize thumbnail proxy with R2 credentials"""
-        self.temp_dir = os.getenv('TEMP_DIR', '/tmp/recipeai')
+        self.temp_dir = os.getenv('TEMP_DIR', '/tmp/aizhu-helper')
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
 
         # R2 Configuration
         self.r2_account_id = os.getenv('R2_ACCOUNT_ID')
         self.r2_access_key = os.getenv('R2_ACCESS_KEY_ID')
         self.r2_secret_key = os.getenv('R2_SECRET_ACCESS_KEY')
-        self.r2_bucket = os.getenv('R2_BUCKET_NAME', 'recipeai-thumbnails')
+        self.r2_bucket = os.getenv('R2_BUCKET_NAME', 'aizhu-helper-thumbnails')
         self.r2_public_url = os.getenv('R2_PUBLIC_URL')  # e.g., https://thumbnails.recipeai.com
 
         if not all([self.r2_account_id, self.r2_access_key, self.r2_secret_key]):
@@ -75,7 +75,7 @@ class ThumbnailProxy:
             response = requests.get(
                 thumbnail_url,
                 timeout=10,
-                headers={'User-Agent': 'RecipeAI/1.0'}
+                headers={'User-Agent': 'AizhuHelper/1.0'}
             )
             response.raise_for_status()
 

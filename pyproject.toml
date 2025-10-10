@@ -1,8 +1,8 @@
 [tool.poetry]
-name = "recipeai-video-processor"
+name = "aizhu-helper-video-processor"
 version = "1.0.0"
-description = "Video analysis and recipe extraction for RecipeAI LINE Bot"
-authors = ["RecipeAI Team"]
+description = "Video analysis and recipe extraction for 愛煮小幫手 LINE Bot"
+authors = ["愛煮小幫手 Team"]
 readme = "README.md"
 packages = [{include = "src"}]
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Docker Build & Test Script for RecipeAI Video Processor
+# Docker Build & Test Script for 愛煮小幫手 Video Processor
 
 set -e  # Exit on error
 

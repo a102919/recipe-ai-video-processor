@@ -4,8 +4,6 @@ Downloads cooking videos from various platforms for recipe extraction
 """
 import os
 import logging
-import tempfile
-import urllib.request
 from pathlib import Path
 from typing import Optional
 import yt_dlp
@@ -17,6 +15,8 @@ from tenacity import (
     before_sleep_log
 )
 from .thumbnail_generator import proxy_thumbnail_to_r2
+from .cookies_manager import CookiesManager
+from .config import R2_COOKIES_BASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ class VideoDownloader:
         """
         self.output_dir = output_dir or os.path.join(os.getcwd(), 'downloads')
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        self.cookies_manager = CookiesManager(R2_COOKIES_BASE_URL)
 
     def _detect_platform(self, url: str) -> str:
         """
@@ -72,109 +73,71 @@ class VideoDownloader:
         if not url or not url.startswith(('http://', 'https://')):
             raise ValueError(f"Invalid URL: {url}")
 
+        platform = self._detect_platform(url)
+        cookie_file = self.cookies_manager.get_cookies_file(platform)
+
+        try:
+            return self._download_with_ydl(url, filename_prefix, cookie_file)
+        finally:
+            # Clean up temporary cookies file
+            if cookie_file and os.path.exists(cookie_file):
+                try:
+                    os.unlink(cookie_file)
+                    logger.debug(f"Cleaned up temporary cookies file: {cookie_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup cookies file: {e}")
+
+    def _download_with_ydl(
+        self,
+        url: str,
+        filename_prefix: str,
+        cookie_file: Optional[str]
+    ) -> tuple[str, Optional[str]]:
+        """
+        Perform actual video download using yt-dlp with retry logic
+
+        Args:
+            url: Video URL
+            filename_prefix: Prefix for output filename
+            cookie_file: Path to cookies file (optional)
+
+        Returns:
+            Tuple of (video_path, thumbnail_url)
+        """
         output_template = os.path.join(
             self.output_dir,
             f"{filename_prefix}_%(id)s.%(ext)s"
         )
 
-        # Detect platform and prepare appropriate cookies from R2
-        cookie_file = None
-        platform = self._detect_platform(url)
-
-        # Platform-specific cookies URLs (R2 public bucket)
-        cookies_mapping = {
-            'instagram': "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.instagram.com_cookies.txt",
-            'youtube': "https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails/www.youtube.com_cookies.txt",
-        }
-
-        cookies_url = cookies_mapping.get(platform)
-        if not cookies_url:
-            logger.info(f"No cookies configured for platform: {platform}")
-        else:
-            try:
-                # Download cookies from R2
-                logger.info(f"Downloading {platform.title()} cookies from R2...")
-
-                # Create request with User-Agent to avoid Cloudflare blocking
-                req = urllib.request.Request(
-                    cookies_url,
-                    headers={'User-Agent': 'RecipeAI-VideoProcessor/1.0'}
-                )
-                with urllib.request.urlopen(req) as response:
-                    cookies_content = response.read().decode('utf-8')
-
-                # Create temporary cookies file
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
-                    f.write(cookies_content)
-                    cookie_file = f.name
-
-                # Debug: Validate cookies file content
-                cookie_lines = cookies_content.strip().split('\n')
-                has_netscape_header = cookie_lines[0].startswith('# Netscape HTTP Cookie File')
-                cookie_names = []
-                for line in cookie_lines:
-                    if not line.startswith('#') and line.strip():
-                        parts = line.split('\t')
-                        if len(parts) >= 6:
-                            cookie_names.append(parts[5])  # Cookie name is 6th field
-
-                logger.info(f"Using {platform.title()} cookies from R2")
-                logger.info(f"Cookies validation: Netscape header={has_netscape_header}, "
-                           f"Cookie count={len(cookie_names)}, "
-                           f"Cookie names={cookie_names[:5]}")  # Show first 5 cookie names
-
-                # Platform-specific critical cookies validation
-                critical_cookies_map = {
-                    'instagram': {'sessionid', 'csrftoken', 'ds_user_id'},
-                    'youtube': {'VISITOR_INFO1_LIVE', 'CONSENT', 'PREF'},  # YouTube cookies may vary
-                }
-                critical_cookies = critical_cookies_map.get(platform, set())
-
-                if critical_cookies:
-                    found_critical = critical_cookies.intersection(set(cookie_names))
-                    missing_critical = critical_cookies - found_critical
-
-                    if missing_critical:
-                        logger.warning(f"Missing some critical cookies: {missing_critical}")
-                    else:
-                        logger.info("All critical cookies present ✓")
-
-            except Exception as e:
-                logger.warning(f"Failed to download/create cookies file from R2: {e}")
-
-        # yt-dlp options: no playlist, default quality
-        # Note: quiet=True causes "Broken pipe" errors with Facebook videos
+        # yt-dlp options
         ydl_opts = {
-            # No format specification - use yt-dlp default
             'outtmpl': output_template,
             'noplaylist': True,
-            'quiet': False,  # Keep False to prevent broken pipe errors
-            'no_warnings': True,  # Hide warnings for cleaner output
-            'sleep_interval': 3,  # Wait 3 seconds between downloads to avoid rate limits
-            'max_sleep_interval': 10,  # Maximum sleep interval if needed
+            'quiet': False,
+            'no_warnings': True,
+            'sleep_interval': 3,
+            'max_sleep_interval': 10,
         }
 
-        # Add cookies file if available
         if cookie_file:
             ydl_opts['cookiefile'] = cookie_file
 
-        # Internal function with retry logic for rate limit handling
+        # Internal function with retry logic
         @retry(
-            stop=stop_after_attempt(4),  # 1 original + 3 retries
-            wait=wait_exponential(multiplier=2, min=2, max=10),  # 2s, 4s, 8s
+            stop=stop_after_attempt(4),
+            wait=wait_exponential(multiplier=2, min=2, max=10),
             retry=retry_if_exception_type(yt_dlp.utils.DownloadError),
             before_sleep=before_sleep_log(logger, logging.WARNING),
             reraise=True
         )
-        def _download_with_retry():
-            """Internal function that performs actual download with retry"""
+        def _perform_download():
             logger.info(f"Downloading video from {url}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if not info:
                     raise ValueError(f"Failed to extract video info from {url}")
 
-                # Get actual downloaded filename
+                # Get downloaded file path
                 video_id = info.get('id', 'unknown')
                 ext = info.get('ext', 'mp4')
                 video_path = os.path.join(
@@ -185,41 +148,20 @@ class VideoDownloader:
                 if not os.path.exists(video_path):
                     raise Exception(f"Download succeeded but file not found: {video_path}")
 
-                # Get thumbnail from yt-dlp
-                thumbnail_url = info.get('thumbnail')
-
-                if thumbnail_url:
-                    # Check if thumbnail needs CORS proxy (Instagram only)
-                    needs_proxy = any(domain in thumbnail_url.lower() for domain in [
-                        'instagram', 'cdninstagram'
-                    ])
-
-                    if needs_proxy:
-                        logger.info(f"Thumbnail has CORS restrictions, proxying to R2...")
-                        try:
-                            thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
-                            logger.info(f"Proxied thumbnail URL: {thumbnail_url}")
-                        except Exception as e:
-                            logger.warning(f"R2 proxy failed: {e}, using original URL")
-                    else:
-                        logger.info(f"Thumbnail URL (no proxy needed): {thumbnail_url}")
-                else:
-                    logger.warning("No thumbnail URL found in video metadata")
+                # Process thumbnail
+                thumbnail_url = self._process_thumbnail(info.get('thumbnail'))
 
                 logger.info(f"Downloaded video to {video_path}")
                 return (video_path, thumbnail_url)
 
         try:
-            return _download_with_retry()
+            return _perform_download()
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
-            # Provide helpful error messages based on error type
             if 'rate-limit' in error_msg.lower() or 'login required' in error_msg.lower():
                 raise ValueError(
                     f"Failed to download video after 4 attempts due to rate limiting. "
-                    f"Instagram/Facebook may have temporarily blocked requests. "
-                    f"The cookies from R2 may have expired. Please update the cookies file at:\n"
-                    f"{cookies_url}\n\n"
+                    f"The platform may have blocked requests or cookies expired. "
                     f"Original error: {e}"
                 )
             else:
@@ -227,14 +169,37 @@ class VideoDownloader:
         except Exception as e:
             logger.error(f"Unexpected error during download: {e}")
             raise
-        finally:
-            # Clean up temporary cookies file
-            if cookie_file and os.path.exists(cookie_file):
-                try:
-                    os.unlink(cookie_file)
-                    logger.debug(f"Cleaned up temporary cookies file: {cookie_file}")
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup cookies file: {e}")
+
+    def _process_thumbnail(self, thumbnail_url: Optional[str]) -> Optional[str]:
+        """
+        Process thumbnail URL, proxying through R2 if needed for CORS
+
+        Args:
+            thumbnail_url: Original thumbnail URL
+
+        Returns:
+            Processed thumbnail URL or None
+        """
+        if not thumbnail_url:
+            logger.warning("No thumbnail URL found in video metadata")
+            return None
+
+        # Check if thumbnail needs CORS proxy (Instagram only)
+        needs_proxy = any(domain in thumbnail_url.lower() for domain in [
+            'instagram', 'cdninstagram'
+        ])
+
+        if needs_proxy:
+            logger.info(f"Thumbnail has CORS restrictions, proxying to R2...")
+            try:
+                thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
+                logger.info(f"Proxied thumbnail URL: {thumbnail_url}")
+            except Exception as e:
+                logger.warning(f"R2 proxy failed: {e}, using original URL")
+        else:
+            logger.info(f"Thumbnail URL (no proxy needed): {thumbnail_url}")
+
+        return thumbnail_url
 
 
 # Convenience function for single-use download

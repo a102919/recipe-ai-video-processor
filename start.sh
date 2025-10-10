@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# RecipeAI Video Processor - Quick Start Script
+# 愛煮小幫手 Video Processor - Quick Start Script
 
 cd "$(dirname "$0")"
 

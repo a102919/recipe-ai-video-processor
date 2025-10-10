@@ -9,21 +9,19 @@ import tempfile
 import shutil
 import logging
 from pathlib import Path
-from dotenv import load_dotenv
 
 from .extractor import extract_key_frames
 from .analyzer import analyze_recipe_from_frames
 from .pipeline import analyze_recipe_from_url
 from .video_utils import get_video_metadata
-
-load_dotenv()
+from .config import ALLOWED_ORIGINS, GEMINI_API_KEY
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="RecipeAI Video Processor",
+    title="愛煮小幫手 Video Processor",
     description="Video frame extraction and Gemini Vision analysis service",
     version="2.0.0"
 )
@@ -31,7 +29,7 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    allow_origins=ALLOWED_ORIGINS.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,8 +56,7 @@ async def readiness_check():
         checks['ffmpeg'] = f'error: {str(e)}'
 
     # Check Gemini API key
-    gemini_key = os.getenv('GEMINI_API_KEY')
-    checks['gemini_api_key'] = 'ok' if gemini_key else 'missing'
+    checks['gemini_api_key'] = 'ok' if GEMINI_API_KEY else 'missing'
 
     # Overall status
     all_ok = all(v == 'ok' for v in checks.values())
@@ -71,7 +68,7 @@ async def readiness_check():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"message": "RecipeAI Video Processor Service (Gemini Vision)"}
+    return {"message": "愛煮小幫手 Video Processor Service (Gemini Vision)"}
 
 
 @app.post("/analyze")
@@ -210,20 +207,14 @@ async def analyze_video_from_url(video_url: str = Form(...)):
 if __name__ == "__main__":
     import uvicorn
     import multiprocessing
+    from .config import HOST, PORT, UVICORN_WORKERS
 
-    port = int(os.getenv("PORT", 8000))
-    host = os.getenv("HOST", "0.0.0.0")
-
-    # Calculate workers based on CPU cores (default: 2x CPU cores)
-    # For Zeabur deployment:
-    # - Developer Plan (2 vCPU): default 4 workers
-    # - Team Plan (4 vCPU): default 8 workers
+    # Calculate workers based on CPU cores if not specified
     cpu_count = multiprocessing.cpu_count()
-    default_workers = cpu_count * 2
-    workers = int(os.getenv("UVICORN_WORKERS", default_workers))
+    workers = UVICORN_WORKERS if UVICORN_WORKERS > 0 else cpu_count * 2
 
-    logger.info(f"Starting RecipeAI Video Processor on {host}:{port}")
-    logger.info(f"Gemini API key configured: {bool(os.getenv('GEMINI_API_KEY'))}")
+    logger.info(f"Starting 愛煮小幫手 Video Processor on {HOST}:{PORT}")
+    logger.info(f"Gemini API key configured: {bool(GEMINI_API_KEY)}")
     logger.info(f"CPU cores detected: {cpu_count}, starting {workers} workers")
 
-    uvicorn.run(app, host=host, port=port, workers=workers)
+    uvicorn.run(app, host=HOST, port=PORT, workers=workers)

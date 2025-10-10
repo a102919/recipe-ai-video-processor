@@ -1,4 +1,4 @@
-# RecipeAI Video Processor - Production Dockerfile
+# 愛煮小幫手 Video Processor - Production Dockerfile
 # Multi-stage build for optimized image size
 
 # Stage 1: Base image with system dependencies
