@@ -9,13 +9,7 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 import yt_dlp
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log
-)
+# tenacity removed - retry logic handled by backend worker layer
 from .thumbnail_generator import proxy_thumbnail_to_r2
 from .cookies_manager import CookiesManager
 from .config import R2_COOKIES_BASE_URL
@@ -199,15 +193,20 @@ class VideoDownloader:
             ydl_opts['cookiefile'] = cookie_file
             logger.info(f"Using cookies file: {cookie_file}")
 
-        # Internal function with retry logic
-        @retry(
-            stop=stop_after_attempt(4),
-            wait=wait_exponential(multiplier=2, min=2, max=10),
-            retry=retry_if_exception_type(yt_dlp.utils.DownloadError),
-            before_sleep=before_sleep_log(logger, logging.WARNING),
-            reraise=True
-        )
-        def _perform_download():
+        # Permanent errors that should not be retried by worker
+        PERMANENT_ERRORS = [
+            'video unavailable',
+            'private video',
+            'deleted',
+            'copyright',
+            'removed',
+            'account terminated',
+            'channel not found',
+            'unsupported url'
+        ]
+
+        # Perform download (single attempt, retry handled by worker layer)
+        try:
             logger.info(f"Downloading video from {url}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -231,22 +230,31 @@ class VideoDownloader:
                 logger.info(f"Downloaded video to {video_path}")
                 return DownloadResult(video_path=video_path, thumbnail_url=thumbnail_url)
 
-        try:
-            return _perform_download()
         except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e)
-            if 'rate-limit' in error_msg.lower() or 'login required' in error_msg.lower():
-                raise ValueError(
-                    f"Failed to download video after 4 attempts due to rate limiting. "
-                    f"The platform may have blocked requests or cookies expired. "
-                    f"Original error: {e}"
-                )
-            elif 'unsupported url' in error_msg.lower() and 'photo' in error_msg.lower():
-                # This is a TikTok photo carousel - try gallery-dl
+            error_msg = str(e).lower()
+
+            # Check if this is a permanent error (should not retry)
+            if any(keyword in error_msg for keyword in PERMANENT_ERRORS):
+                logger.error(f"Permanent download error (will not retry): {e}")
+                raise ValueError(f"[PERMANENT] Video cannot be downloaded: {e}")
+
+            # TikTok photo carousel - switch to gallery-dl
+            if 'unsupported url' in error_msg and 'photo' in error_msg:
                 logger.info("Detected TikTok photo carousel, switching to gallery-dl")
                 return self._download_photos_with_gallery_dl(url, filename_prefix)
-            else:
-                raise ValueError(f"Failed to download video: {e}")
+
+            # Rate limit or transient errors (worker will retry with backoff)
+            if 'rate-limit' in error_msg or 'too many requests' in error_msg:
+                logger.warning(f"Rate limit detected (worker will retry): {e}")
+                raise ValueError(f"[RETRYABLE] Rate limit: {e}")
+
+            if 'login required' in error_msg or 'sign in' in error_msg:
+                logger.warning(f"Authentication required (worker will retry): {e}")
+                raise ValueError(f"[RETRYABLE] Login required: {e}")
+
+            # Unknown error - let worker retry
+            logger.error(f"Download error (worker will retry): {e}")
+            raise ValueError(f"Failed to download video: {e}")
         except Exception as e:
             logger.error(f"Unexpected error during download: {e}")
             raise
