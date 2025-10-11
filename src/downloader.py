@@ -323,6 +323,33 @@ class VideoDownloader:
 
         return thumbnail_url
 
+    def _upload_photo_thumbnail(self, photo_path: str) -> str:
+        """
+        Upload local photo file to R2 and return public URL
+
+        Args:
+            photo_path: Path to local photo file
+
+        Returns:
+            Public URL of uploaded photo on R2
+
+        Raises:
+            Exception: If upload fails
+        """
+        from .thumbnail_generator import ThumbnailProxy
+
+        logger.info(f"Uploading photo thumbnail to R2: {photo_path}")
+        try:
+            proxy = ThumbnailProxy()
+            thumbnail_url = proxy.upload_to_r2(photo_path)
+            logger.info(f"Photo thumbnail uploaded: {thumbnail_url}")
+            return thumbnail_url
+        except Exception as e:
+            logger.error(f"Failed to upload photo thumbnail to R2: {e}")
+            # Fallback: return local path (will fail but at least we try)
+            logger.warning("Falling back to local path (frontend may not be able to access)")
+            return photo_path
+
     def _download_photos_with_gallery_dl(
         self,
         url: str,
@@ -380,8 +407,11 @@ class VideoDownloader:
 
             logger.info(f"Downloaded {len(photo_path_strs)} photos from carousel")
 
-            # Use first photo as thumbnail
-            thumbnail_url = photo_path_strs[0] if photo_path_strs else None
+            # Upload first photo to R2 as thumbnail (return public URL instead of local path)
+            if photo_path_strs:
+                thumbnail_url = self._upload_photo_thumbnail(photo_path_strs[0])
+            else:
+                thumbnail_url = None
 
             return DownloadResult(thumbnail_url=thumbnail_url, photo_paths=photo_path_strs)
 
