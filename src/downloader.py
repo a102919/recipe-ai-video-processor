@@ -4,6 +4,7 @@ Downloads cooking videos from various platforms for recipe extraction
 """
 import os
 import logging
+import subprocess
 from pathlib import Path
 from typing import Optional
 import yt_dlp
@@ -55,16 +56,18 @@ class VideoDownloader:
         else:
             return 'other'
 
-    def download(self, url: str, filename_prefix: str = "video") -> tuple[str, Optional[str]]:
+    def download(self, url: str, filename_prefix: str = "video") -> tuple[Optional[str], Optional[str], Optional[list[str]]]:
         """
-        Download video from URL with automatic retry on transient failures
+        Download video or photos from URL with automatic retry on transient failures
 
         Args:
-            url: Video URL (YouTube, Instagram, etc.)
+            url: Video/Photo URL (YouTube, TikTok, Instagram, etc.)
             filename_prefix: Prefix for output filename
 
         Returns:
-            Tuple of (video_path, thumbnail_url)
+            Tuple of (video_path, thumbnail_url, photo_paths)
+            - For video: (video_path, thumbnail_url, None)
+            - For TikTok photo carousel: (None, thumbnail_url, [photo_paths])
 
         Raises:
             ValueError: If URL is invalid or unsupported
@@ -84,7 +87,7 @@ class VideoDownloader:
         url: str,
         filename_prefix: str,
         cookie_file: Optional[str]
-    ) -> tuple[str, Optional[str]]:
+    ) -> tuple[Optional[str], Optional[str], Optional[list[str]]]:
         """
         Perform actual video download using yt-dlp with retry logic
 
@@ -94,7 +97,7 @@ class VideoDownloader:
             cookie_file: Path to cookies file (optional)
 
         Returns:
-            Tuple of (video_path, thumbnail_url)
+            Tuple of (video_path, thumbnail_url, None)
         """
         output_template = os.path.join(
             self.output_dir,
@@ -144,7 +147,7 @@ class VideoDownloader:
                 thumbnail_url = self._process_thumbnail(info)
 
                 logger.info(f"Downloaded video to {video_path}")
-                return (video_path, thumbnail_url)
+                return (video_path, thumbnail_url, None)
 
         try:
             return _perform_download()
@@ -156,6 +159,10 @@ class VideoDownloader:
                     f"The platform may have blocked requests or cookies expired. "
                     f"Original error: {e}"
                 )
+            elif 'unsupported url' in error_msg.lower() and 'photo' in error_msg.lower():
+                # This is a TikTok photo carousel - try gallery-dl
+                logger.info("Detected TikTok photo carousel, switching to gallery-dl")
+                return self._download_photos_with_gallery_dl(url, filename_prefix)
             else:
                 raise ValueError(f"Failed to download video: {e}")
         except Exception as e:
@@ -234,18 +241,89 @@ class VideoDownloader:
 
         return thumbnail_url
 
+    def _download_photos_with_gallery_dl(
+        self,
+        url: str,
+        filename_prefix: str
+    ) -> tuple[None, Optional[str], list[str]]:
+        """
+        Download TikTok photo carousel using gallery-dl
+
+        Args:
+            url: TikTok photo carousel URL
+            filename_prefix: Prefix for output directory
+
+        Returns:
+            Tuple of (None, thumbnail_url, photo_paths)
+
+        Raises:
+            ValueError: If download fails
+        """
+        logger.info(f"Downloading TikTok photo carousel with gallery-dl: {url}")
+
+        # Run gallery-dl to download photos
+        cmd = [
+            'gallery-dl',
+            '--directory', self.output_dir,
+            '--quiet',
+            url
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            # Note: gallery-dl return code 4 means partial success (e.g., audio failed but images succeeded)
+            if result.returncode not in (0, 4):
+                logger.error(f"gallery-dl failed with code {result.returncode}: {result.stderr}")
+                raise ValueError(f"Failed to download photos: {result.stderr}")
+
+            logger.info(f"gallery-dl completed with return code {result.returncode}")
+
+            # Find downloaded images
+            photo_paths = []
+            for ext in ['*.jpg', '*.jpeg', '*.png', '*.webp']:
+                photo_paths.extend(Path(self.output_dir).rglob(ext))
+
+            if not photo_paths:
+                raise ValueError("No photos downloaded from TikTok carousel")
+
+            # Sort by filename to maintain order
+            photo_paths = sorted(photo_paths)
+            photo_path_strs = [str(p) for p in photo_paths]
+
+            logger.info(f"Downloaded {len(photo_path_strs)} photos from carousel")
+
+            # Use first photo as thumbnail
+            thumbnail_url = photo_path_strs[0] if photo_path_strs else None
+
+            return (None, thumbnail_url, photo_path_strs)
+
+        except subprocess.TimeoutExpired:
+            logger.error("gallery-dl timed out after 60 seconds")
+            raise ValueError("Photo download timed out")
+        except Exception as e:
+            logger.error(f"Unexpected error in gallery-dl: {e}")
+            raise ValueError(f"Failed to download photos: {e}")
+
 
 # Convenience function for single-use download
-def download_video(url: str, output_dir: Optional[str] = None) -> tuple[str, Optional[str]]:
+def download_video(url: str, output_dir: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[list[str]]]:
     """
-    Download video from URL
+    Download video or photos from URL
 
     Args:
-        url: Video URL
+        url: Video/Photo URL
         output_dir: Output directory (optional)
 
     Returns:
-        Tuple of (video_path, thumbnail_url)
+        Tuple of (video_path, thumbnail_url, photo_paths)
+        - For video: (video_path, thumbnail_url, None)
+        - For TikTok photo carousel: (None, thumbnail_url, [photo_paths])
     """
     downloader = VideoDownloader(output_dir=output_dir)
     return downloader.download(url)

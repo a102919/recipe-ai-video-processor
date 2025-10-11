@@ -88,42 +88,54 @@ def analyze_recipe_from_url(
         logger.info(f"Pipeline started for URL: {url}")
         logger.info(f"Temp directory: {temp_dir}")
 
-        # Stage 2: Download video
-        logger.info("Stage 1/3: Downloading video...")
-        video_path, thumbnail_url = download_video(url, output_dir=temp_dir)
-        logger.info(f"Video downloaded: {video_path}")
-        logger.info(f"Thumbnail URL: {thumbnail_url or 'N/A'}")
+        # Stage 2: Download video or photos
+        logger.info("Stage 1/3: Downloading content...")
+        video_path, thumbnail_url, photo_paths = download_video(url, output_dir=temp_dir)
 
-        # Get video metadata using FFmpeg
-        metadata = get_video_metadata(video_path)
-        video_file_size = metadata['size']
-        video_duration = metadata['duration']
-        logger.info(f"Video file size: {video_file_size} bytes")
-        logger.info(f"Video duration: {video_duration}s")
-
-        # Auto-calculate optimal frame count if not specified
-        if frame_count is None:
-            frame_count = calculate_optimal_frame_count(int(video_duration))
-            logger.info(f"Auto-calculated frame count: {frame_count} frames (based on {video_duration}s duration)")
+        # Check if this is a photo carousel or video
+        if photo_paths:
+            # Photo carousel - use photos directly
+            logger.info(f"Downloaded {len(photo_paths)} photos from carousel")
+            logger.info(f"Thumbnail: {thumbnail_url or 'N/A'}")
+            all_frames = photo_paths
+            video_file_size = sum(os.path.getsize(p) for p in photo_paths)
+            video_duration = 0  # No duration for static images
+            logger.info(f"Total photo size: {video_file_size} bytes")
         else:
-            logger.info(f"Using specified frame count: {frame_count} frames")
+            # Video - extract frames
+            logger.info(f"Video downloaded: {video_path}")
+            logger.info(f"Thumbnail URL: {thumbnail_url or 'N/A'}")
 
-        # Stage 3: Extract key frames
-        logger.info("Stage 2/3: Extracting frames...")
-        frames_dir = os.path.join(temp_dir, 'frames')
-        # Set max_frames based on video duration to cover entire video
-        # Use 1fps sampling, so max_frames should match duration
-        max_frames_needed = max(int(video_duration) + 10, 200)  # +10 buffer, min 200
-        all_frames = extract_key_frames(
-            video_path,
-            frames_dir,
-            count=frame_count,
-            max_frames=max_frames_needed
-        )
-        logger.info(f"Extracted {len(all_frames)} frames")
+            # Get video metadata using FFmpeg
+            metadata = get_video_metadata(video_path)
+            video_file_size = metadata['size']
+            video_duration = metadata['duration']
+            logger.info(f"Video file size: {video_file_size} bytes")
+            logger.info(f"Video duration: {video_duration}s")
 
-        if not all_frames:
-            raise ValueError("No frames extracted from video")
+            # Auto-calculate optimal frame count if not specified
+            if frame_count is None:
+                frame_count = calculate_optimal_frame_count(int(video_duration))
+                logger.info(f"Auto-calculated frame count: {frame_count} frames (based on {video_duration}s duration)")
+            else:
+                logger.info(f"Using specified frame count: {frame_count} frames")
+
+            # Stage 3: Extract key frames
+            logger.info("Stage 2/3: Extracting frames...")
+            frames_dir = os.path.join(temp_dir, 'frames')
+            # Set max_frames based on video duration to cover entire video
+            # Use 1fps sampling, so max_frames should match duration
+            max_frames_needed = max(int(video_duration) + 10, 200)  # +10 buffer, min 200
+            all_frames = extract_key_frames(
+                video_path,
+                frames_dir,
+                count=frame_count,
+                max_frames=max_frames_needed
+            )
+            logger.info(f"Extracted {len(all_frames)} frames")
+
+            if not all_frames:
+                raise ValueError("No frames extracted from video")
 
         # Stage 4: Analyze with Gemini Vision
         logger.info("Stage 3/3: Analyzing with Gemini Vision...")
@@ -141,6 +153,7 @@ def analyze_recipe_from_url(
             **recipe_data,
             'metadata': {
                 'gemini_tokens': usage_metadata,
+                'content_type': 'photo_carousel' if photo_paths else 'video',
                 'video_info': {
                     'duration_seconds': video_duration,
                     'file_size_bytes': video_file_size,

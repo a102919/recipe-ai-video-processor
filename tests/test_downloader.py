@@ -66,11 +66,12 @@ class TestVideoDownloader:
 
         # Execute
         downloader = VideoDownloader(output_dir=temp_dir)
-        video_path, thumbnail_url = downloader.download("https://youtube.com/watch?v=test123")
+        video_path, thumbnail_url, photo_paths = downloader.download("https://youtube.com/watch?v=test123")
 
         # Verify
         assert video_path == str(expected_path)
         assert thumbnail_url == 'https://example.com/thumb.jpg'
+        assert photo_paths is None
         mock_ydl.extract_info.assert_called_once_with(
             "https://youtube.com/watch?v=test123",
             download=True
@@ -91,7 +92,7 @@ class TestVideoDownloader:
 
         # Execute
         downloader = VideoDownloader(output_dir=temp_dir)
-        video_path, thumbnail_url = downloader.download(
+        video_path, thumbnail_url, photo_paths = downloader.download(
             "https://youtube.com/watch?v=abc456",
             filename_prefix="cooking"
         )
@@ -100,6 +101,7 @@ class TestVideoDownloader:
         assert video_path == str(expected_path)
         assert "cooking_" in video_path
         assert thumbnail_url is None
+        assert photo_paths is None
 
     @patch('yt_dlp.YoutubeDL')
     def test_download_tiktok_with_thumbnails_array(self, mock_ydl_class, temp_dir):
@@ -138,11 +140,12 @@ class TestVideoDownloader:
 
         # Execute
         downloader = VideoDownloader(output_dir=temp_dir)
-        video_path, thumbnail_url = downloader.download("https://tiktok.com/@user/video/tiktok123")
+        video_path, thumbnail_url, photo_paths = downloader.download("https://tiktok.com/@user/video/tiktok123")
 
         # Verify - should select originCover (highest preference=10)
         assert video_path == str(expected_path)
         assert thumbnail_url == 'https://tiktok.com/origin_cover.jpg'
+        assert photo_paths is None
 
     @patch('yt_dlp.YoutubeDL')
     def test_download_fallback_to_single_thumbnail(self, mock_ydl_class, temp_dir):
@@ -163,11 +166,12 @@ class TestVideoDownloader:
 
         # Execute
         downloader = VideoDownloader(output_dir=temp_dir)
-        video_path, thumbnail_url = downloader.download("https://youtube.com/watch?v=youtube456")
+        video_path, thumbnail_url, photo_paths = downloader.download("https://youtube.com/watch?v=youtube456")
 
         # Verify - should use single thumbnail field
         assert video_path == str(expected_path)
         assert thumbnail_url == 'https://youtube.com/thumb.jpg'
+        assert photo_paths is None
 
     @patch('yt_dlp.YoutubeDL')
     def test_download_no_info_extracted(self, mock_ydl_class, temp_dir):
@@ -216,6 +220,42 @@ class TestVideoDownloader:
         with pytest.raises(ValueError, match="Failed to download video"):
             downloader.download("https://youtube.com/watch?v=unavailable")
 
+    @patch('subprocess.run')
+    @patch('yt_dlp.YoutubeDL')
+    def test_download_tiktok_photo_carousel(self, mock_ydl_class, mock_subprocess, temp_dir):
+        """Test download TikTok photo carousel with gallery-dl"""
+        import yt_dlp
+
+        # Setup mock to raise DownloadError for TikTok photo (triggers gallery-dl fallback)
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError(
+            "ERROR: Unsupported URL: https://www.tiktok.com/@user/photo/123456"
+        )
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        # Create mock photo files
+        photo1 = Path(temp_dir) / "gallery-dl" / "tiktok" / "user" / "photo1.jpg"
+        photo2 = Path(temp_dir) / "gallery-dl" / "tiktok" / "user" / "photo2.jpg"
+        photo1.parent.mkdir(parents=True, exist_ok=True)
+        photo1.touch()
+        photo2.touch()
+
+        # Mock subprocess (gallery-dl)
+        mock_result = MagicMock()
+        mock_result.returncode = 4  # Partial success (images ok, audio failed)
+        mock_subprocess.return_value = mock_result
+
+        # Execute
+        downloader = VideoDownloader(output_dir=temp_dir)
+        video_path, thumbnail_url, photo_paths = downloader.download("https://vt.tiktok.com/shorturl/")
+
+        # Verify
+        assert video_path is None
+        assert thumbnail_url is not None  # First photo as thumbnail
+        assert photo_paths is not None
+        assert len(photo_paths) == 2
+        assert all(str(photo1) in p or str(photo2) in p for p in photo_paths)
+
 
 class TestConvenienceFunction:
     """Test convenience function"""
@@ -223,13 +263,14 @@ class TestConvenienceFunction:
     @patch.object(VideoDownloader, 'download')
     def test_download_video(self, mock_method, temp_dir):
         """Test download_video convenience function"""
-        mock_method.return_value = ("/path/to/video.mp4", "https://example.com/thumb.jpg")
+        mock_method.return_value = ("/path/to/video.mp4", "https://example.com/thumb.jpg", None)
 
-        video_path, thumbnail_url = download_video(
+        video_path, thumbnail_url, photo_paths = download_video(
             "https://youtube.com/watch?v=test",
             output_dir=temp_dir
         )
 
         assert video_path == "/path/to/video.mp4"
         assert thumbnail_url == "https://example.com/thumb.jpg"
+        assert photo_paths is None
         mock_method.assert_called_once_with("https://youtube.com/watch?v=test")

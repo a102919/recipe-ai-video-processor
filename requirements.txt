@@ -16,6 +16,7 @@ Pillow==11.0.0
 # Note: Instagram frequently changes their API, always use latest yt-dlp
 # Minimum version 2025.09.26 required for Instagram support
 yt-dlp>=2025.09.26  # Video downloading (auto-update to latest)
+gallery-dl>=1.30.0  # TikTok photo carousel support
 
 # Cloud Storage (Cloudflare R2)
 boto3==1.35.95  # S3-compatible client for R2

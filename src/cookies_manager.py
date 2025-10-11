@@ -77,12 +77,17 @@ class CookiesManager:
             temp_file_path = temp_file.name
 
             logger.info(f"Using {platform} cookies: {temp_file_path}")
-            yield temp_file_path
 
         except Exception as e:
             logger.warning(f"Failed to download cookies: {e}")
-            yield None
+            temp_file_path = None
 
+        # Always yield (either path or None), then handle any exceptions from the caller
+        try:
+            yield temp_file_path
+        except Exception:
+            # Re-raise any exception from the with-block to properly propagate it
+            raise
         finally:
             # Guarantee cleanup
             if temp_file_path and os.path.exists(temp_file_path):
