@@ -7,6 +7,7 @@ import logging
 import subprocess
 from pathlib import Path
 from typing import Optional
+from dataclasses import dataclass
 import yt_dlp
 from tenacity import (
     retry,
@@ -20,6 +21,33 @@ from .cookies_manager import CookiesManager
 from .config import R2_COOKIES_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DownloadResult:
+    """
+    Result of video/photo download operation
+
+    Supports tuple unpacking for backward compatibility:
+        video_path, thumbnail_url, photo_paths = result
+    """
+    video_path: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    photo_paths: Optional[list[str]] = None
+
+    def __iter__(self):
+        """Enable tuple unpacking: video_path, thumbnail, photos = result"""
+        return iter((self.video_path, self.thumbnail_url, self.photo_paths))
+
+    @property
+    def is_video(self) -> bool:
+        """Check if result contains a video"""
+        return self.video_path is not None
+
+    @property
+    def is_photo_carousel(self) -> bool:
+        """Check if result contains photos"""
+        return self.photo_paths is not None and len(self.photo_paths) > 0
 
 
 class VideoDownloader:
@@ -56,7 +84,7 @@ class VideoDownloader:
         else:
             return 'other'
 
-    def download(self, url: str, filename_prefix: str = "video") -> tuple[Optional[str], Optional[str], Optional[list[str]]]:
+    def download(self, url: str, filename_prefix: str = "video") -> DownloadResult:
         """
         Download video or photos from URL with automatic retry on transient failures
 
@@ -70,9 +98,9 @@ class VideoDownloader:
             filename_prefix: Prefix for output filename
 
         Returns:
-            Tuple of (video_path, thumbnail_url, photo_paths)
-            - For video: (video_path, thumbnail_url, None)
-            - For TikTok photo carousel: (None, thumbnail_url, [photo_paths])
+            DownloadResult containing:
+            - For video: DownloadResult(video_path=..., thumbnail_url=...)
+            - For TikTok photo carousel: DownloadResult(thumbnail_url=..., photo_paths=[...])
 
         Raises:
             ValueError: If URL is invalid or unsupported
@@ -127,7 +155,7 @@ class VideoDownloader:
         url: str,
         filename_prefix: str,
         cookie_file: Optional[str]
-    ) -> tuple[Optional[str], Optional[str], Optional[list[str]]]:
+    ) -> DownloadResult:
         """
         Perform actual video download using yt-dlp with retry logic
 
@@ -137,30 +165,33 @@ class VideoDownloader:
             cookie_file: Path to cookies file (optional)
 
         Returns:
-            Tuple of (video_path, thumbnail_url, None)
+            DownloadResult with video_path and thumbnail_url
         """
         output_template = os.path.join(
             self.output_dir,
             f"{filename_prefix}_%(id)s.%(ext)s"
         )
 
-        # yt-dlp options
+        # yt-dlp options with aggressive rate limiting for bot detection avoidance
         ydl_opts = {
             'outtmpl': output_template,
             'noplaylist': True,
             'quiet': False,
             'no_warnings': True,
-            'sleep_interval': 3,
-            'max_sleep_interval': 10,
+            # YouTube recommends 5-10s delays to avoid "content not available" errors
+            'sleep_interval': 5,           # Minimum wait between requests
+            'max_sleep_interval': 10,      # Maximum wait between requests
+            'sleep_interval_requests': 1,  # Wait 1s between fragment downloads
         }
 
-        # For YouTube: use clients that don't require PO tokens when no cookies
+        # For YouTube: ALWAYS use clients that bypass bot detection
+        # These clients work with/without cookies and avoid most bot checks
         platform = self._detect_platform(url)
-        if platform == 'youtube' and not cookie_file:
-            logger.info("Using YouTube clients that bypass bot detection (web_safari, tv_embedded)")
+        if platform == 'youtube':
+            logger.info("Using YouTube clients that bypass bot detection (ios, web_safari, tv_embedded)")
             ydl_opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['web_safari', 'tv_embedded', 'mweb']
+                    'player_client': ['ios', 'web_safari', 'tv_embedded', 'mweb']
                 }
             }
 
@@ -198,7 +229,7 @@ class VideoDownloader:
                 thumbnail_url = self._process_thumbnail(info)
 
                 logger.info(f"Downloaded video to {video_path}")
-                return (video_path, thumbnail_url, None)
+                return DownloadResult(video_path=video_path, thumbnail_url=thumbnail_url)
 
         try:
             return _perform_download()
@@ -296,7 +327,7 @@ class VideoDownloader:
         self,
         url: str,
         filename_prefix: str
-    ) -> tuple[None, Optional[str], list[str]]:
+    ) -> DownloadResult:
         """
         Download TikTok photo carousel using gallery-dl
 
@@ -305,7 +336,7 @@ class VideoDownloader:
             filename_prefix: Prefix for output directory
 
         Returns:
-            Tuple of (None, thumbnail_url, photo_paths)
+            DownloadResult with thumbnail_url and photo_paths
 
         Raises:
             ValueError: If download fails
@@ -352,7 +383,7 @@ class VideoDownloader:
             # Use first photo as thumbnail
             thumbnail_url = photo_path_strs[0] if photo_path_strs else None
 
-            return (None, thumbnail_url, photo_path_strs)
+            return DownloadResult(thumbnail_url=thumbnail_url, photo_paths=photo_path_strs)
 
         except subprocess.TimeoutExpired:
             logger.error("gallery-dl timed out after 60 seconds")
@@ -363,7 +394,7 @@ class VideoDownloader:
 
 
 # Convenience function for single-use download
-def download_video(url: str, output_dir: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[list[str]]]:
+def download_video(url: str, output_dir: Optional[str] = None) -> DownloadResult:
     """
     Download video or photos from URL
 
@@ -372,9 +403,13 @@ def download_video(url: str, output_dir: Optional[str] = None) -> tuple[Optional
         output_dir: Output directory (optional)
 
     Returns:
-        Tuple of (video_path, thumbnail_url, photo_paths)
-        - For video: (video_path, thumbnail_url, None)
-        - For TikTok photo carousel: (None, thumbnail_url, [photo_paths])
+        DownloadResult containing:
+        - For video: DownloadResult(video_path=..., thumbnail_url=...)
+        - For TikTok photo carousel: DownloadResult(thumbnail_url=..., photo_paths=[...])
+
+    Note:
+        Supports tuple unpacking for backward compatibility:
+            video_path, thumbnail_url, photo_paths = download_video(url)
     """
     downloader = VideoDownloader(output_dir=output_dir)
     return downloader.download(url)
