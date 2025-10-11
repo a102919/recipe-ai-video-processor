@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv(Path(__file__).parent / '.env')
+# Load environment variables from video-processor root directory
+load_dotenv(Path(__file__).parent.parent / '.env')
 
 # Initialize R2 client
 r2_client = boto3.client(

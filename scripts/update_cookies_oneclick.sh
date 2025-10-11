@@ -65,7 +65,7 @@ echo ""
 echo "🔄 Step 2/3: Uploading to Cloudflare R2..."
 echo ""
 
-python3 upload_youtube_cookies.py
+python3 scripts/upload_youtube_cookies.py
 
 if [ $? -ne 0 ]; then
     echo "❌ Upload failed"

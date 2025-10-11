@@ -3,11 +3,13 @@ Cookies Manager for yt-dlp
 Handles downloading and caching cookies from R2 storage
 """
 import os
+import ssl
 import tempfile
 import urllib.request
 import logging
 from typing import Optional, Generator
 from contextlib import contextmanager
+import certifi
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +59,16 @@ class CookiesManager:
 
             logger.info(f"Downloading {platform} cookies from R2...")
 
+            # Create SSL context with certifi certificates
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+
             # Create request with User-Agent to avoid Cloudflare blocking
             req = urllib.request.Request(
                 cookies_url,
                 headers={'User-Agent': 'AizhuHelper-VideoProcessor/1.0'}
             )
 
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, context=ssl_context) as response:
                 cookies_content = response.read().decode('utf-8')
 
             # Create temporary cookies file
