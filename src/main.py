@@ -72,10 +72,7 @@ async def root():
 
 
 @app.post("/analyze")
-async def analyze_video(
-    video: UploadFile = File(...),
-    video_url: str = Form(...)
-):
+async def analyze_video(video: UploadFile = File(...)):
     """
     Analyze cooking video using Gemini Vision API
 
@@ -86,6 +83,9 @@ async def analyze_video(
     4. Analyze with Gemini Vision API
     5. Return structured recipe JSON with cost metadata
     6. Cleanup temp files
+
+    Args:
+        video: Uploaded video file
 
     Returns:
         Recipe JSON with name, ingredients, steps, tags, and metadata (tokens, video info)

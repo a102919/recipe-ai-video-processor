@@ -102,6 +102,74 @@ class TestVideoDownloader:
         assert thumbnail_url is None
 
     @patch('yt_dlp.YoutubeDL')
+    def test_download_tiktok_with_thumbnails_array(self, mock_ydl_class, temp_dir):
+        """Test download with TikTok-style thumbnails array"""
+        # Setup mock with thumbnails array (TikTok format)
+        mock_ydl = MagicMock()
+        mock_info = {
+            'id': 'tiktok123',
+            'ext': 'mp4',
+            'title': 'Cooking TikTok',
+            'thumbnails': [
+                {
+                    'id': 'first_frame',
+                    'url': 'https://tiktok.com/first_frame.jpg',
+                    'preference': 0
+                },
+                {
+                    'id': 'originCover',
+                    'url': 'https://tiktok.com/origin_cover.jpg',
+                    'preference': 10
+                },
+                {
+                    'id': 'dynamicCover',
+                    'url': 'https://tiktok.com/dynamic_cover.jpg',
+                    'preference': 5
+                }
+            ],
+            'thumbnail': 'https://tiktok.com/first_frame.jpg'  # Fallback
+        }
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        # Create expected output file
+        expected_path = Path(temp_dir) / "video_tiktok123.mp4"
+        expected_path.touch()
+
+        # Execute
+        downloader = VideoDownloader(output_dir=temp_dir)
+        video_path, thumbnail_url = downloader.download("https://tiktok.com/@user/video/tiktok123")
+
+        # Verify - should select originCover (highest preference=10)
+        assert video_path == str(expected_path)
+        assert thumbnail_url == 'https://tiktok.com/origin_cover.jpg'
+
+    @patch('yt_dlp.YoutubeDL')
+    def test_download_fallback_to_single_thumbnail(self, mock_ydl_class, temp_dir):
+        """Test fallback to single thumbnail field when thumbnails array is empty"""
+        # Setup mock without thumbnails array
+        mock_ydl = MagicMock()
+        mock_info = {
+            'id': 'youtube456',
+            'ext': 'mp4',
+            'thumbnail': 'https://youtube.com/thumb.jpg'
+        }
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        # Create expected output file
+        expected_path = Path(temp_dir) / "video_youtube456.mp4"
+        expected_path.touch()
+
+        # Execute
+        downloader = VideoDownloader(output_dir=temp_dir)
+        video_path, thumbnail_url = downloader.download("https://youtube.com/watch?v=youtube456")
+
+        # Verify - should use single thumbnail field
+        assert video_path == str(expected_path)
+        assert thumbnail_url == 'https://youtube.com/thumb.jpg'
+
+    @patch('yt_dlp.YoutubeDL')
     def test_download_no_info_extracted(self, mock_ydl_class, temp_dir):
         """Test download fails when no info extracted"""
         # Setup mock to return None
