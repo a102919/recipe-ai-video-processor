@@ -60,6 +60,11 @@ class VideoDownloader:
         """
         Download video or photos from URL with automatic retry on transient failures
 
+        Multi-tier fallback strategy:
+        1. Try without cookies first (fastest, works for 90% public videos)
+        2. If bot detection or login required, retry with cookies from R2
+        3. If cookies also fail, raise detailed error
+
         Args:
             url: Video/Photo URL (YouTube, TikTok, Instagram, etc.)
             filename_prefix: Prefix for output filename
@@ -78,9 +83,44 @@ class VideoDownloader:
 
         platform = self._detect_platform(url)
 
-        # Use context manager for automatic cleanup
+        # Tier 1: Try without cookies (optimal for public content)
+        logger.info(f"Attempting download without cookies (Tier 1)...")
+        try:
+            return self._download_with_ydl(url, filename_prefix, cookie_file=None)
+        except (ValueError, Exception) as e:
+            error_msg = str(e).lower()
+
+            # Check if error indicates authentication is needed
+            needs_auth = any(keyword in error_msg for keyword in [
+                'sign in', 'login required', 'bot', 'age-restricted',
+                'private', 'members-only', 'not available'
+            ])
+
+            if not needs_auth:
+                # Not an auth issue, re-raise immediately
+                logger.error(f"Tier 1 failed with non-auth error: {e}")
+                raise
+
+            logger.warning(f"Tier 1 failed (auth required): {e}")
+            logger.info(f"Attempting download with cookies (Tier 2)...")
+
+        # Tier 2: Try with cookies from R2
         with self.cookies_manager.get_cookies_file(platform) as cookie_file:
-            return self._download_with_ydl(url, filename_prefix, cookie_file)
+            if not cookie_file:
+                raise ValueError(
+                    f"Authentication required but no cookies available for {platform}. "
+                    f"Please configure cookies following YOUTUBE_COOKIES_SETUP.md"
+                )
+
+            try:
+                return self._download_with_ydl(url, filename_prefix, cookie_file)
+            except Exception as e:
+                logger.error(f"Tier 2 (with cookies) also failed: {e}")
+                raise ValueError(
+                    f"Failed to download even with cookies. "
+                    f"Cookies may have expired or video is unavailable. "
+                    f"Original error: {e}"
+                )
 
     def _download_with_ydl(
         self,
@@ -114,8 +154,19 @@ class VideoDownloader:
             'max_sleep_interval': 10,
         }
 
+        # For YouTube: use clients that don't require PO tokens when no cookies
+        platform = self._detect_platform(url)
+        if platform == 'youtube' and not cookie_file:
+            logger.info("Using YouTube clients that bypass bot detection (web_safari, tv_embedded)")
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': ['web_safari', 'tv_embedded', 'mweb']
+                }
+            }
+
         if cookie_file:
             ydl_opts['cookiefile'] = cookie_file
+            logger.info(f"Using cookies file: {cookie_file}")
 
         # Internal function with retry logic
         @retry(
