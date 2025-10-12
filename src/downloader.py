@@ -178,14 +178,15 @@ class VideoDownloader:
             'sleep_interval_requests': 1,  # Wait 1s between fragment downloads
         }
 
-        # For YouTube: ALWAYS use clients that bypass bot detection
-        # These clients work with/without cookies and avoid most bot checks
+        # For YouTube: Use Android client to bypass bot detection
+        # Android client typically doesn't require authentication and avoids most bot checks
         platform = self._detect_platform(url)
         if platform == 'youtube':
-            logger.info("Using YouTube clients that bypass bot detection (ios, web_safari, tv_embedded)")
+            logger.info("Using Android client to bypass bot detection (no cookies required)")
             ydl_opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['ios', 'web_safari', 'tv_embedded', 'mweb']
+                    'player_client': ['android'],
+                    'skip': ['hls', 'dash']  # Skip certain formats to reduce detection
                 }
             }
 
