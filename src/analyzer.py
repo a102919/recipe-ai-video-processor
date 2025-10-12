@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class RecipeAnalyzer:
     """Analyzes video frames using Gemini Vision to extract recipe data"""
 
-    SYSTEM_PROMPT = """分析這些烹飪影片畫面，提取完整食譜資訊。請用繁體中文輸出 JSON：
+    SYSTEM_PROMPT = """分析這些烹飪影片畫面，提取完整食譜資訊。請用繁體中文與台灣用詞輸出 JSON：
 
 {
   "name": "菜名",
@@ -38,7 +38,8 @@ class RecipeAnalyzer:
       "step_number": 1,
       "description": "步驟說明",
       "duration_minutes": 5,
-      "temperature": "溫度（如適用）"
+      "temperature": "溫度（如適用）",
+      "tips": ["這個步驟的訣竅或注意事項"]
     }
   ],
   "servings": 2,
@@ -48,9 +49,9 @@ class RecipeAnalyzer:
 }
 
 要求：
-1. 食譜名稱必須是繁體中文
+1. 食譜名稱必須是繁體中文，而且是台灣用詞
 2. 食材必須包含名稱和份量，如果畫面中沒有明確顯示，請標記為 "適量"
-3. 步驟必須按順序排列，包含關鍵的時間和溫度資訊
+3. 步驟必須按順序排列，包含關鍵的時間和溫度資訊，並在 `tips` 欄位中補充說明關鍵訣竅。
 4. 標籤請從以下分類選擇：中式、日式、韓式、泰式、西式、快炒、燉煮、炸物、烘焙、甜點、簡易、進階
 
 只回傳 JSON，不要其他說明文字。"""
