@@ -227,8 +227,8 @@ class VideoDownloader:
                 if not os.path.exists(video_path):
                     raise Exception(f"Download succeeded but file not found: {video_path}")
 
-                # Process thumbnail
-                thumbnail_url = self._process_thumbnail(info)
+                # Process thumbnail (pass video_path for fallback extraction)
+                thumbnail_url = self._process_thumbnail(info, video_path)
 
                 logger.info(f"Downloaded video to {video_path}")
                 return DownloadResult(video_path=video_path, thumbnail_url=thumbnail_url)
@@ -236,15 +236,16 @@ class VideoDownloader:
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e).lower()
 
+            # Check for TikTok photo carousel FIRST (before permanent error check)
+            # This is a special case where 'unsupported url' + 'photo' should fallback to gallery-dl
+            if 'unsupported url' in error_msg and 'photo' in error_msg:
+                logger.info("Detected TikTok photo carousel, switching to gallery-dl")
+                return self._download_photos_with_gallery_dl(url, filename_prefix)
+
             # Check if this is a permanent error (should not retry)
             if any(keyword in error_msg for keyword in PERMANENT_ERRORS):
                 logger.error(f"Permanent download error (will not retry): {e}")
                 raise ValueError(f"[PERMANENT] Video cannot be downloaded: {e}")
-
-            # TikTok photo carousel - switch to gallery-dl
-            if 'unsupported url' in error_msg and 'photo' in error_msg:
-                logger.info("Detected TikTok photo carousel, switching to gallery-dl")
-                return self._download_photos_with_gallery_dl(url, filename_prefix)
 
             # Rate limit or transient errors (worker will retry with backoff)
             if 'rate-limit' in error_msg or 'too many requests' in error_msg:
@@ -301,12 +302,79 @@ class VideoDownloader:
 
         return thumbnail_url
 
-    def _process_thumbnail(self, info: dict) -> Optional[str]:
+    def _extract_thumbnail_from_video(self, video_path: str) -> Optional[str]:
+        """
+        Extract a thumbnail frame from video file using FFmpeg
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            Path to extracted thumbnail image, or None if extraction fails
+        """
+        if not os.path.exists(video_path):
+            logger.error(f"Video file not found: {video_path}")
+            return None
+
+        try:
+            # Generate output path for thumbnail
+            video_dir = os.path.dirname(video_path)
+            video_name = os.path.splitext(os.path.basename(video_path))[0]
+            thumbnail_path = os.path.join(video_dir, f"{video_name}_thumb.jpg")
+
+            logger.info(f"Extracting thumbnail from video using FFmpeg...")
+            logger.info(f"  Video: {video_path}")
+            logger.info(f"  Output: {thumbnail_path}")
+
+            # Use FFmpeg to extract frame at 1 second
+            cmd = [
+                'ffmpeg',
+                '-i', video_path,
+                '-ss', '00:00:01',  # Extract at 1 second
+                '-vframes', '1',     # Extract 1 frame
+                '-q:v', '2',         # High quality (2 = high, 31 = low)
+                '-y',                # Overwrite output file
+                thumbnail_path
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                logger.error(f"FFmpeg failed with code {result.returncode}")
+                logger.error(f"  stderr: {result.stderr[:200]}")
+                return None
+
+            if not os.path.exists(thumbnail_path):
+                logger.error(f"Thumbnail extraction succeeded but file not found")
+                return None
+
+            logger.info(f"✓ Successfully extracted thumbnail from video!")
+            return thumbnail_path
+
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg timed out after 30 seconds")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to extract thumbnail from video: {e}")
+            logger.exception("Full traceback:")
+            return None
+
+    def _process_thumbnail(self, info: dict, video_path: Optional[str] = None) -> Optional[str]:
         """
         Process thumbnail URL, proxying through R2 if needed for CORS
 
+        Fallback strategy for Instagram:
+        1. Try to download thumbnail from Instagram CDN and upload to R2
+        2. If that fails (403, timeout, etc.), extract frame from video and upload to R2
+
         Args:
             info: Video info dict from yt-dlp
+            video_path: Path to downloaded video file (for fallback extraction)
 
         Returns:
             Processed thumbnail URL or None
@@ -315,6 +383,11 @@ class VideoDownloader:
         thumbnail_url = self._select_best_thumbnail(info)
 
         if not thumbnail_url:
+            logger.warning("No thumbnail URL in video metadata")
+            # Try to extract from video as last resort
+            if video_path:
+                logger.info("Attempting to extract thumbnail from video...")
+                return self._extract_and_upload_thumbnail(video_path)
             return None
 
         # Check if thumbnail needs CORS proxy (Instagram only)
@@ -323,16 +396,71 @@ class VideoDownloader:
         ])
 
         if needs_proxy:
-            logger.info(f"Thumbnail has CORS restrictions, proxying to R2...")
+            logger.info(f"🔍 Detected Instagram thumbnail (CORS-blocked), proxying to R2...")
+            logger.info(f"   Original URL: {thumbnail_url[:80]}...")
             try:
-                thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
-                logger.info(f"Proxied thumbnail URL: {thumbnail_url}")
+                r2_thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
+                logger.info(f"✅ Successfully proxied to R2!")
+                logger.info(f"   R2 URL: {r2_thumbnail_url}")
+                return r2_thumbnail_url
             except Exception as e:
-                logger.warning(f"R2 proxy failed: {e}, using original URL")
-        else:
-            logger.info(f"Thumbnail URL (no proxy needed): {thumbnail_url}")
+                logger.error(f"❌ R2 proxy FAILED - Instagram CDN blocked or URL expired")
+                logger.error(f"   Error type: {type(e).__name__}")
+                logger.error(f"   Error message: {str(e)}")
+                logger.exception("   Full traceback:")
 
-        return thumbnail_url
+                # Fallback: Extract thumbnail from video
+                if video_path:
+                    logger.info("🔄 Attempting fallback: extracting thumbnail from video...")
+                    return self._extract_and_upload_thumbnail(video_path)
+                else:
+                    logger.warning(f"⚠️  No video path available for fallback, using original Instagram URL")
+                    logger.warning(f"⚠️  Frontend may encounter CORS issues with this URL!")
+                    return thumbnail_url
+        else:
+            logger.info(f"✓ Thumbnail URL (no proxy needed): {thumbnail_url[:80]}...")
+            return thumbnail_url
+
+    def _extract_and_upload_thumbnail(self, video_path: str) -> Optional[str]:
+        """
+        Extract thumbnail from video and upload to R2
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            R2 public URL of uploaded thumbnail, or None if extraction/upload fails
+        """
+        thumbnail_path = None
+        try:
+            # Step 1: Extract thumbnail from video
+            thumbnail_path = self._extract_thumbnail_from_video(video_path)
+            if not thumbnail_path:
+                logger.error("Failed to extract thumbnail from video")
+                return None
+
+            # Step 2: Upload to R2
+            logger.info("Uploading extracted thumbnail to R2...")
+            from .thumbnail_generator import ThumbnailProxy
+            proxy = ThumbnailProxy()
+            r2_url = proxy.upload_to_r2(thumbnail_path)
+
+            logger.info(f"✅ Fallback successful! Uploaded video-extracted thumbnail to R2")
+            logger.info(f"   R2 URL: {r2_url}")
+            return r2_url
+
+        except Exception as e:
+            logger.error(f"Failed to extract and upload thumbnail: {e}")
+            logger.exception("Full traceback:")
+            return None
+        finally:
+            # Cleanup: remove extracted thumbnail file
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    os.remove(thumbnail_path)
+                    logger.debug(f"Cleaned up extracted thumbnail: {thumbnail_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup thumbnail: {e}")
 
     def _upload_photo_thumbnail(self, photo_path: str) -> str:
         """

@@ -5,22 +5,33 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: video-processor:latest
     container_name: recipeai-video-processor
+    restart: always
     ports:
-      - "${PORT:-8000}:8000"
+      - "8000:8000"
     env_file:
       - .env
     environment:
-      # Override specific settings for local development
+      # Override specific settings for GCP deployment
+      - PORT=8000
+      - HOST=0.0.0.0
       - UVICORN_WORKERS=${UVICORN_WORKERS:-2}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    # Optional: mount source for live development
-    # volumes:
-    #   - ./src:/app/src
+
+    volumes:
+      # Temporary video downloads (cleared on restart)
+      - /tmp/recipeai:/tmp/recipeai
+
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

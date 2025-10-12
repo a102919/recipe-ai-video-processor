@@ -93,6 +93,11 @@ class TestRecipeAnalyzer:
         mock_response = MagicMock()
         import json
         mock_response.text = f'```json\n{json.dumps(valid_recipe_json)}\n```'
+        # Mock usage metadata
+        mock_response.usage_metadata = MagicMock()
+        mock_response.usage_metadata.prompt_token_count = 1000
+        mock_response.usage_metadata.candidates_token_count = 500
+        mock_response.usage_metadata.total_token_count = 1500
         mock_model.generate_content.return_value = mock_response
         mock_model_class.return_value = mock_model
 
@@ -102,10 +107,13 @@ class TestRecipeAnalyzer:
 
         result = analyzer.analyze_frames(mock_frames)
 
-        # Verify
-        assert result["name"] == "蒜香奶油蝦"
-        assert len(result["ingredients"]) == 3
-        assert len(result["steps"]) == 3
+        # Verify - result now contains 'recipe' and 'usage_metadata'
+        assert 'recipe' in result
+        assert 'usage_metadata' in result
+        assert result["recipe"]["name"] == "蒜香奶油蝦"
+        assert len(result["recipe"]["ingredients"]) == 3
+        assert len(result["recipe"]["steps"]) == 3
+        assert result["usage_metadata"]["total_tokens"] == 1500
 
         # Verify API was called with correct number of images
         mock_model.generate_content.assert_called_once()

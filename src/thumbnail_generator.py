@@ -31,19 +31,35 @@ class ThumbnailProxy:
         self.r2_bucket = os.getenv('R2_BUCKET_NAME', 'aizhu-helper-thumbnails')
         self.r2_public_url = os.getenv('R2_PUBLIC_URL')  # e.g., https://thumbnails.recipeai.com
 
+        # Enhanced logging for R2 configuration status
+        logger.info("=== ThumbnailProxy Initialization ===")
+        logger.info(f"R2_ACCOUNT_ID: {'✓ set' if self.r2_account_id else '✗ NOT SET'}")
+        logger.info(f"R2_ACCESS_KEY_ID: {'✓ set' if self.r2_access_key else '✗ NOT SET'}")
+        logger.info(f"R2_SECRET_ACCESS_KEY: {'✓ set' if self.r2_secret_key else '✗ NOT SET'}")
+        logger.info(f"R2_BUCKET_NAME: {self.r2_bucket}")
+        logger.info(f"R2_PUBLIC_URL: {self.r2_public_url or 'NOT SET (will use .r2.dev)'}")
+
         if not all([self.r2_account_id, self.r2_access_key, self.r2_secret_key]):
-            logger.warning("R2 credentials not configured. Thumbnail upload will fail.")
+            logger.warning("⚠️  R2 credentials not configured. Thumbnail upload will fail.")
+            logger.warning("⚠️  Please check R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY environment variables")
 
         # S3-compatible client for R2
         if self.r2_account_id:
-            self.s3_client = boto3.client(
-                's3',
-                endpoint_url=f'https://{self.r2_account_id}.r2.cloudflarestorage.com',
-                aws_access_key_id=self.r2_access_key,
-                aws_secret_access_key=self.r2_secret_key,
-                config=Config(signature_version='s3v4'),
-            )
+            try:
+                self.s3_client = boto3.client(
+                    's3',
+                    endpoint_url=f'https://{self.r2_account_id}.r2.cloudflarestorage.com',
+                    aws_access_key_id=self.r2_access_key,
+                    aws_secret_access_key=self.r2_secret_key,
+                    config=Config(signature_version='s3v4'),
+                )
+                logger.info("✓ R2 S3 client initialized successfully")
+            except Exception as e:
+                logger.error(f"✗ Failed to initialize R2 S3 client: {e}")
+                logger.exception("Full traceback:")
+                self.s3_client = None
         else:
+            logger.warning("✗ R2 client not initialized (missing account ID)")
             self.s3_client = None
 
     def download_thumbnail(self, thumbnail_url: str, output_path: Optional[str] = None) -> str:
@@ -69,7 +85,7 @@ class ThumbnailProxy:
             output_path = os.path.join(self.temp_dir, f"thumb_{thumbnail_id}.jpg")
 
         try:
-            logger.info(f"Downloading thumbnail from {thumbnail_url}")
+            logger.info(f"Downloading thumbnail from: {thumbnail_url[:100]}...")
 
             # Download with timeout and headers
             response = requests.get(
@@ -77,6 +93,12 @@ class ThumbnailProxy:
                 timeout=10,
                 headers={'User-Agent': 'AizhuHelper/1.0'}
             )
+
+            # Log detailed response info
+            logger.info(f"HTTP Response: {response.status_code} {response.reason}")
+            logger.info(f"Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+            logger.info(f"Content-Length: {len(response.content)} bytes")
+
             response.raise_for_status()
 
             # Save to file
@@ -86,14 +108,26 @@ class ThumbnailProxy:
             if not os.path.exists(output_path):
                 raise Exception(f"Thumbnail not saved: {output_path}")
 
-            logger.info(f"Thumbnail downloaded: {output_path}")
+            logger.info(f"✓ Thumbnail downloaded successfully: {output_path}")
             return output_path
 
+        except requests.HTTPError as e:
+            logger.error(f"✗ HTTP error during thumbnail download: {e}")
+            logger.error(f"   Status code: {e.response.status_code if e.response else 'N/A'}")
+            logger.error(f"   Response: {e.response.text[:200] if e.response else 'N/A'}")
+            logger.exception("Full traceback:")
+            raise Exception(f"Failed to download thumbnail (HTTP {e.response.status_code if e.response else 'error'}): {e}")
+        except requests.Timeout as e:
+            logger.error(f"✗ Timeout downloading thumbnail after 10 seconds: {e}")
+            logger.exception("Full traceback:")
+            raise Exception(f"Timeout downloading thumbnail: {e}")
         except requests.RequestException as e:
-            logger.error(f"Thumbnail download failed: {e}")
+            logger.error(f"✗ Network error downloading thumbnail: {e}")
+            logger.exception("Full traceback:")
             raise Exception(f"Failed to download thumbnail: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"✗ Unexpected error during thumbnail download: {e}")
+            logger.exception("Full traceback:")
             raise
 
     def upload_to_r2(self, thumbnail_path: str, object_key: Optional[str] = None) -> str:
@@ -122,7 +156,10 @@ class ThumbnailProxy:
             object_key = f"thumbnails/{uuid.uuid4().hex}{file_ext}"
 
         try:
-            logger.info(f"Uploading thumbnail to R2: {object_key}")
+            logger.info(f"Uploading thumbnail to R2...")
+            logger.info(f"  Bucket: {self.r2_bucket}")
+            logger.info(f"  Key: {object_key}")
+            logger.info(f"  File: {thumbnail_path} ({os.path.getsize(thumbnail_path)} bytes)")
 
             with open(thumbnail_path, 'rb') as f:
                 self.s3_client.put_object(
@@ -140,11 +177,16 @@ class ThumbnailProxy:
                 # Fallback: use R2.dev subdomain (if public)
                 public_url = f"https://{self.r2_bucket}.r2.dev/{object_key}"
 
-            logger.info(f"Thumbnail uploaded: {public_url}")
+            logger.info(f"✓ Thumbnail uploaded successfully to R2!")
+            logger.info(f"✓ Public URL: {public_url}")
             return public_url
 
         except Exception as e:
-            logger.error(f"R2 upload failed: {e}")
+            logger.error(f"✗ R2 upload failed: {e}")
+            logger.error(f"   Bucket: {self.r2_bucket}")
+            logger.error(f"   Key: {object_key}")
+            logger.error(f"   Endpoint: https://{self.r2_account_id}.r2.cloudflarestorage.com")
+            logger.exception("Full traceback:")
             raise
 
     def download_and_upload(self, thumbnail_url: str) -> str:
