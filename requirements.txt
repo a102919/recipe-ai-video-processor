@@ -15,6 +15,7 @@ Pillow==11.0.0
 # Video Processing
 # Note: Instagram frequently changes their API, always use latest yt-dlp
 # Minimum version 2025.09.26 required for Instagram support
+# IMPORTANT: Using Android client to bypass YouTube bot detection (2025-01-12)
 yt-dlp>=2025.09.26  # Video downloading (auto-update to latest)
 gallery-dl>=1.30.0  # TikTok photo carousel support
 

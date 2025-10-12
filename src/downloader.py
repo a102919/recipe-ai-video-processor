@@ -1,6 +1,7 @@
 """
 Video Downloader using yt-dlp
 Downloads cooking videos from various platforms for recipe extraction
+Version: 2.0.0 (Android client for YouTube bot detection bypass)
 """
 import os
 import logging
@@ -54,6 +55,7 @@ class VideoDownloader:
         Args:
             output_dir: Directory for downloaded videos (default: temp dir)
         """
+        logger.info("VideoDownloader v2.0.0 initialized (Android client for YouTube)")
         self.output_dir = output_dir or os.path.join(os.getcwd(), 'downloads')
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         self.cookies_manager = CookiesManager(R2_COOKIES_BASE_URL)
