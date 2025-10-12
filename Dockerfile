@@ -35,6 +35,9 @@ WORKDIR /app
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 
+# Force rebuild from this point (bust cache)
+ARG CACHEBUST=1
+
 # Copy application code
 COPY src/ ./src/
 
