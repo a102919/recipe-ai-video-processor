@@ -28,6 +28,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Stage 3: Production image
 FROM base as production
 
+# Force cache invalidation - update this timestamp to rebuild
+LABEL build.timestamp="2025-01-12T18:30:00Z"
+LABEL build.version="2.0.0"
+
 # Set working directory
 WORKDIR /app
 
@@ -36,7 +40,8 @@ COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 
 # Force rebuild from this point (bust cache)
-ARG CACHEBUST=1
+# Update timestamp to force complete rebuild: 2025-01-12T18:30:00Z
+RUN echo "Build version: 2.0.0 (Android client) - 2025-01-12T18:30:00Z"
 
 # Copy application code
 COPY src/ ./src/
