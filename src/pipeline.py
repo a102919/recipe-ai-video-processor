@@ -137,9 +137,13 @@ def analyze_recipe_from_url(
             if not all_frames:
                 raise ValueError("No frames extracted from video")
 
-        # Stage 4: Analyze with Gemini Vision
+        # Stage 4: Analyze with Gemini Vision (including thumbnail)
         logger.info("Stage 3/3: Analyzing with Gemini Vision...")
-        analysis_result = analyze_recipe_from_frames(all_frames, api_key=api_key)
+        analysis_result = analyze_recipe_from_frames(
+            all_frames,
+            api_key=api_key,
+            thumbnail_url=thumbnail_url
+        )
         recipe_data = analysis_result['recipe']
         usage_metadata = analysis_result['usage_metadata']
 
