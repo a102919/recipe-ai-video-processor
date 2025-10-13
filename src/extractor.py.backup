@@ -56,8 +56,6 @@ class FrameExtractor:
             '-frames:v', str(self.max_frames),  # Max frames limit
             output_pattern
         ]
-        # Memory optimization: single thread, ultrafast preset
-        cmd.extend(['-threads', '1', '-preset', 'ultrafast'])
 
         try:
             logger.info(f"Extracting frames from {video_path} at 1fps")

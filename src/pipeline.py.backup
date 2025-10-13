@@ -3,7 +3,6 @@ Recipe Extraction Pipeline
 End-to-end workflow: URL -> Download -> Extract Frames -> Analyze -> Recipe
 """
 import os
-import gc
 import tempfile
 import shutil
 import logging
@@ -180,6 +179,3 @@ def analyze_recipe_from_url(
                 logger.info(f"Cleaned up temp directory: {temp_dir}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup {temp_dir}: {e}")
-
-        # Force garbage collection after video processing to free memory
-        gc.collect()

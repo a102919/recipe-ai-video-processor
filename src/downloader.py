@@ -117,7 +117,8 @@ class VideoDownloader:
             # Check if error indicates authentication is needed
             needs_auth = any(keyword in error_msg for keyword in [
                 'sign in', 'login required', 'bot', 'age-restricted',
-                'private', 'members-only', 'not available'
+                'private', 'members-only', 'not available',
+                'cannot parse data', 'unable to extract video url'
             ])
 
             if not needs_auth:
