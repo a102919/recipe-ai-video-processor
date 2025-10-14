@@ -18,6 +18,7 @@ from .extractor import extract_key_frames
 from .analyzer import analyze_recipe_from_frames
 from .pipeline import analyze_recipe_from_url
 from .video_utils import get_video_metadata
+from .thumbnail_generator import ThumbnailProxy
 from .config import (
     ALLOWED_ORIGINS,
     GEMINI_API_KEY,
@@ -114,85 +115,240 @@ async def root():
     return {"message": "愛煮小幫手 Video Processor Service (Gemini Vision)"}
 
 
+def _upload_thumbnail(file_path: str) -> str | None:
+    """
+    Upload thumbnail to R2, return URL or None
+
+    Args:
+        file_path: Path to image file to upload
+
+    Returns:
+        Thumbnail URL or None if upload fails
+    """
+    try:
+        logger.info(f"Uploading thumbnail to R2: {file_path}")
+        proxy = ThumbnailProxy()
+        thumbnail_url = proxy.upload_to_r2(file_path)
+        logger.info(f"Thumbnail uploaded: {thumbnail_url}")
+        return thumbnail_url
+    except Exception as e:
+        logger.warning(f"Failed to upload thumbnail: {e}")
+        return None
+
+
+def _build_response(
+    recipe_data: Dict[str, Any],
+    usage_metadata: Dict[str, Any],
+    thumbnail_url: str | None,
+    video_info: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Build standardized response with recipe and metadata
+
+    Args:
+        recipe_data: Parsed recipe data from Gemini
+        usage_metadata: Token usage information
+        thumbnail_url: R2 thumbnail URL or None
+        video_info: Video/image file information
+
+    Returns:
+        Complete response dictionary
+    """
+    return {
+        **recipe_data,
+        'thumbnail_url': thumbnail_url,
+        'metadata': {
+            'gemini_tokens': usage_metadata,
+            'video_info': video_info
+        }
+    }
+
+
+def _process_image(file_path: str, file_size: int) -> Dict[str, Any]:
+    """
+    Process single image file
+
+    Args:
+        file_path: Path to image file
+        file_size: File size in bytes
+
+    Returns:
+        Response dictionary with recipe and metadata
+    """
+    logger.info("Processing as single image")
+
+    # Analyze single image
+    analysis_result = analyze_recipe_from_frames([file_path])
+    recipe_data = analysis_result['recipe']
+    usage_metadata = analysis_result['usage_metadata']
+
+    logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
+    logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+
+    # Upload thumbnail
+    thumbnail_url = _upload_thumbnail(file_path)
+
+    # Build and return response
+    return _build_response(
+        recipe_data,
+        usage_metadata,
+        thumbnail_url,
+        video_info={
+            'duration_seconds': 0,  # Images have no duration
+            'file_size_bytes': file_size,
+            'frames_extracted': 1,
+            'frames_analyzed': 1
+        }
+    )
+
+
+def _process_video(file_path: str, file_size: int, temp_dir: str) -> Dict[str, Any]:
+    """
+    Process video file
+
+    Args:
+        file_path: Path to video file
+        file_size: File size in bytes
+        temp_dir: Temporary directory for frame extraction
+
+    Returns:
+        Response dictionary with recipe and metadata
+    """
+    logger.info("Processing as video")
+
+    # Get video metadata
+    metadata = get_video_metadata(file_path)
+    video_duration = metadata['duration']
+    logger.info(f"Video file size: {file_size} bytes")
+    logger.info(f"Video duration: {video_duration}s")
+
+    # Extract key frames
+    frames_dir = os.path.join(temp_dir, 'frames')
+    all_frames = extract_key_frames(file_path, frames_dir, count=12)
+    logger.info(f"Extracted {len(all_frames)} frames")
+
+    if not all_frames:
+        raise HTTPException(
+            status_code=400,
+            detail="No frames could be extracted from video"
+        )
+
+    # Analyze with Gemini Vision
+    analysis_result = analyze_recipe_from_frames(all_frames)
+    recipe_data = analysis_result['recipe']
+    usage_metadata = analysis_result['usage_metadata']
+
+    logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
+    logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+
+    # Upload thumbnail (use first frame)
+    thumbnail_url = _upload_thumbnail(all_frames[0])
+
+    # Build and return response
+    return _build_response(
+        recipe_data,
+        usage_metadata,
+        thumbnail_url,
+        video_info={
+            'duration_seconds': video_duration,
+            'file_size_bytes': file_size,
+            'frames_extracted': len(all_frames),
+            'frames_analyzed': len(all_frames)
+        }
+    )
+
+
+def _is_image_file(content_type: str, filename: str) -> bool:
+    """
+    Detect if uploaded file is an image
+
+    Args:
+        content_type: MIME content type
+        filename: Original filename
+
+    Returns:
+        True if file is an image
+    """
+    return (
+        content_type.startswith('image/') or
+        filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp'))
+    )
+
+
+def _save_uploaded_file(upload: UploadFile, temp_dir: str, is_image: bool) -> str:
+    """
+    Save uploaded file to temporary directory
+
+    Args:
+        upload: FastAPI UploadFile object
+        temp_dir: Temporary directory path
+        is_image: Whether file is an image
+
+    Returns:
+        Path to saved file
+    """
+    if is_image:
+        ext = '.jpg'  # Default to jpg for images
+        if upload.filename and upload.filename.lower().endswith('.png'):
+            ext = '.png'
+        file_path = os.path.join(temp_dir, f"image_{os.urandom(4).hex()}{ext}")
+    else:
+        file_path = os.path.join(temp_dir, f"video_{os.urandom(4).hex()}.mp4")
+
+    with open(file_path, 'wb') as f:
+        shutil.copyfileobj(upload.file, f)
+
+    logger.info(f"Saved {'image' if is_image else 'video'}: {file_path}")
+    return file_path
+
+
 @app.post("/analyze")
 async def analyze_video(video: UploadFile = File(...)):
     """
-    Analyze cooking video using Gemini Vision API
+    Analyze cooking video or image using Gemini Vision API
 
     Process:
-    1. Save uploaded video to temp file
-    2. Extract frames at 1fps using FFmpeg
-    3. Select 12 key frames (evenly distributed)
-    4. Analyze with Gemini Vision API
-    5. Return structured recipe JSON with cost metadata
-    6. Cleanup temp files
+    1. Save uploaded file to temp directory
+    2. Detect if image or video
+    3. Route to appropriate processor (image or video)
+    4. Return structured recipe JSON with metadata
+    5. Cleanup temp files
 
     Args:
-        video: Uploaded video file
+        video: Uploaded video or image file
 
     Returns:
-        Recipe JSON with name, ingredients, steps, tags, and metadata (tokens, video info)
+        Recipe JSON with name, ingredients, steps, tags, and metadata
     """
     temp_dir = None
-    video_path = None
 
     try:
         # Create temporary directory
         temp_dir = tempfile.mkdtemp(prefix='recipeai_')
         logger.info(f"Created temp dir: {temp_dir}")
 
-        # Save uploaded video
-        video_path = os.path.join(temp_dir, f"video_{os.urandom(4).hex()}.mp4")
-        with open(video_path, 'wb') as f:
-            shutil.copyfileobj(video.file, f)
-        logger.info(f"Saved video: {video_path}")
+        # Detect file type
+        content_type = video.content_type or ''
+        filename = video.filename or ''
+        is_image = _is_image_file(content_type, filename)
 
-        # Collect video metadata
-        # Get video metadata using FFmpeg
-        metadata = get_video_metadata(video_path)
-        video_file_size = metadata['size']
-        video_duration = metadata['duration']
-        logger.info(f"Video file size: {video_file_size} bytes")
-        logger.info(f"Video duration: {video_duration}s")
+        # Save uploaded file
+        file_path = _save_uploaded_file(video, temp_dir, is_image)
+        file_size = os.path.getsize(file_path)
 
-        # Extract key frames
-        frames_dir = os.path.join(temp_dir, 'frames')
-        all_frames = extract_key_frames(video_path, frames_dir, count=12)
-        logger.info(f"Extracted {len(all_frames)} frames")
+        # Route to appropriate processor
+        if is_image:
+            return _process_image(file_path, file_size)
+        else:
+            return _process_video(file_path, file_size, temp_dir)
 
-        if not all_frames:
-            raise HTTPException(
-                status_code=400,
-                detail="No frames could be extracted from video"
-            )
-
-        # Analyze with Gemini Vision
-        analysis_result = analyze_recipe_from_frames(all_frames)
-        recipe_data = analysis_result['recipe']
-        usage_metadata = analysis_result['usage_metadata']
-
-        logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
-        logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
-
-        # Return recipe with metadata
-        return {
-            **recipe_data,
-            'metadata': {
-                'gemini_tokens': usage_metadata,
-                'video_info': {
-                    'duration_seconds': video_duration,
-                    'file_size_bytes': video_file_size,
-                    'frames_extracted': len(all_frames),
-                    'frames_analyzed': len(all_frames)
-                }
-            }
-        }
-
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Video analysis failed: {str(e)}", exc_info=True)
+        logger.error(f"Media analysis failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Video analysis failed: {str(e)}"
+            detail=f"Media analysis failed: {str(e)}"
         )
 
     finally:
