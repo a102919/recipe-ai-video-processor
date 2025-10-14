@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  video-processor-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: video-processor-test
+    ports:
+      - "8001:8000"  # Use different port to avoid conflict
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - /tmp/recipeai:/tmp/recipeai
+    restart: "no"  # Don't auto-restart for testing
+
+    # Memory limits to simulate GCP e2-micro (1GB RAM)
+    # Reserve ~200MB for system, leaving ~800MB for container
+    mem_limit: 800m
+    mem_reservation: 600m
+
+    # CPU limits to simulate e2-micro (0.25-2 vCPU burst)
+    cpus: 0.5
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Logging to monitor container behavior
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,14 @@
+[Unit]
+Description=Run cleanup-temp-files.sh every hour
+Requires=cleanup-temp-files.service
+
+[Timer]
+# Run every hour
+OnCalendar=hourly
+# Run 5 minutes after boot if missed
+OnBootSec=5min
+# Run immediately if last run was more than 1 hour ago
+Persistent=true
+
+[Install]
+WantedBy=timers.target
