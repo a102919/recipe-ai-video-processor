@@ -210,30 +210,30 @@ class RecipeAnalyzer:
         # Load images
         images = []
 
-        # Load thumbnail first if provided
-        if thumbnail_url:
-            logger.info(f"Loading thumbnail image from: {thumbnail_url[:80]}...")
-            thumbnail_img = self._load_thumbnail(thumbnail_url)
-            if thumbnail_img:
-                images.append(thumbnail_img)
-                logger.info(f"Added thumbnail as first image for analysis")
-            else:
-                logger.warning(f"Failed to load thumbnail, proceeding with frames only")
-
-        # Load video frames
-        for frame_path in frame_paths:
-            try:
-                img = Image.open(frame_path)
-                images.append(img)
-                logger.debug(f"Loaded frame: {frame_path}")
-            except Exception as e:
-                logger.error(f"Failed to load frame {frame_path}: {e}")
-                raise ValueError(f"Cannot load image: {frame_path}")
-
-        logger.info(f"Analyzing {len(images)} images with Gemini Vision (including thumbnail: {thumbnail_url is not None and len(images) > len(frame_paths)})")
-
-        # Call Gemini API with retry mechanism
         try:
+            # Load thumbnail first if provided
+            if thumbnail_url:
+                logger.info(f"Loading thumbnail image from: {thumbnail_url[:80]}...")
+                thumbnail_img = self._load_thumbnail(thumbnail_url)
+                if thumbnail_img:
+                    images.append(thumbnail_img)
+                    logger.info(f"Added thumbnail as first image for analysis")
+                else:
+                    logger.warning(f"Failed to load thumbnail, proceeding with frames only")
+
+            # Load video frames
+            for frame_path in frame_paths:
+                try:
+                    img = Image.open(frame_path)
+                    images.append(img)
+                    logger.debug(f"Loaded frame: {frame_path}")
+                except Exception as e:
+                    logger.error(f"Failed to load frame {frame_path}: {e}")
+                    raise ValueError(f"Cannot load image: {frame_path}")
+
+            logger.info(f"Analyzing {len(images)} images with Gemini Vision (including thumbnail: {thumbnail_url is not None and len(images) > len(frame_paths)})")
+
+            # Call Gemini API with retry mechanism
             response = self._call_gemini_api_with_retry(images)
 
             # Extract usage metadata for cost tracking
@@ -265,6 +265,18 @@ class RecipeAnalyzer:
                 exc_info=True
             )
             raise
+
+        finally:
+            # CRITICAL: Close all PIL Image objects to free file handles and memory
+            for img in images:
+                try:
+                    img.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close image: {e}")
+
+            # Clear images list to help garbage collector
+            images.clear()
+            logger.debug(f"Closed {len(frame_paths)} image file handles")
 
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """
