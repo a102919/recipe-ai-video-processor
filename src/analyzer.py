@@ -1,6 +1,7 @@
 """
-Recipe Analyzer using Gemini Vision API
+Recipe Analyzer using LangChain with multiple LLM providers
 Analyzes cooking video frames to extract structured recipe information
+Supports: Gemini, Grok (xAI), OpenAI with automatic fallback
 """
 import os
 import json
@@ -9,10 +10,12 @@ import logging
 import time
 import requests
 import tempfile
+import base64
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from PIL import Image
-import google.generativeai as genai
+from io import BytesIO
+from langchain_core.messages import HumanMessage
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -20,6 +23,11 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log
 )
+
+try:
+    from .llm_config import get_llm_manager
+except ImportError:
+    from llm_config import get_llm_manager
 
 logger = logging.getLogger(__name__)
 
@@ -75,43 +83,65 @@ class RecipeAnalyzer:
         Initialize recipe analyzer
 
         Args:
-            api_key: Gemini API key (defaults to GEMINI_API_KEY env var)
-            model_name: Gemini model to use (defaults to GEMINI_MODEL env var or gemini-2.5-flash)
+            api_key: DEPRECATED - API keys are now managed via environment variables
+            model_name: DEPRECATED - Model selection handled automatically
             timeout_seconds: Timeout for API calls in seconds (default: 60)
             max_retries: Maximum number of retry attempts (default: 3)
         """
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
-        if not self.api_key:
-            raise ValueError("GEMINI_API_KEY must be provided or set in environment")
+        # Legacy parameters ignored (kept for backward compatibility)
+        if api_key:
+            logger.warning(
+                "api_key parameter is deprecated. "
+                "Use GEMINI_API_KEYS, GROK_API_KEYS, or OPENAI_API_KEYS environment variables."
+            )
+        if model_name:
+            logger.warning("model_name parameter is deprecated. Model selection is automatic.")
 
-        self.model_name = model_name or os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
 
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(
-            self.model_name,
-            generation_config={
-                'temperature': 0.7
-            }
-        )
-        # Note: timeout is handled by the underlying HTTP client (default 60s)
-        # Combined with tenacity retry mechanism for resilience
+        # Get LLM manager (handles multiple providers)
+        try:
+            self.llm_manager = get_llm_manager()
+            logger.info(
+                f"RecipeAnalyzer initialized with LangChain: "
+                f"timeout={timeout_seconds}s, max_retries={max_retries}"
+            )
+            logger.info(f"Provider chain: {self.llm_manager.get_provider_metadata()}")
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM manager: {e}")
+            raise ValueError(
+                "Failed to initialize LLM providers. "
+                "Please configure at least one of: GEMINI_API_KEYS, GROK_API_KEYS, OPENAI_API_KEYS"
+            )
 
-        logger.info(
-            f"RecipeAnalyzer initialized: model={self.model_name}, "
-            f"timeout={timeout_seconds}s, max_retries={max_retries}"
-        )
-
-    def _call_gemini_api_with_retry(self, images: List[Any]) -> Any:
+    def _image_to_base64(self, image: Image.Image) -> str:
         """
-        Call Gemini API with retry mechanism
+        Convert PIL Image to base64 string for LangChain
+
+        Args:
+            image: PIL Image object
+
+        Returns:
+            Base64-encoded image string with data URI prefix
+        """
+        buffered = BytesIO()
+        # Convert to RGB if needed (handle RGBA, grayscale, etc.)
+        if image.mode not in ('RGB', 'L'):
+            image = image.convert('RGB')
+        image.save(buffered, format="JPEG", quality=85)
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        return f"data:image/jpeg;base64,{img_str}"
+
+    def _call_llm_api_with_retry(self, images: List[Image.Image]) -> Dict[str, Any]:
+        """
+        Call LLM API with retry mechanism (supports multiple providers)
 
         Args:
             images: List of PIL Image objects
 
         Returns:
-            Gemini API response
+            Dict with response text and metadata
 
         Raises:
             Exception: If all retry attempts fail
@@ -128,15 +158,44 @@ class RecipeAnalyzer:
         def _api_call():
             start_time = time.time()
             try:
-                logger.debug(f"Calling Gemini API with {len(images)} images")
-                response = self.model.generate_content([self.SYSTEM_PROMPT] + images)
+                # Convert images to base64
+                image_contents = [
+                    {"type": "image_url", "image_url": {"url": self._image_to_base64(img)}}
+                    for img in images
+                ]
+
+                # Build message
+                message = HumanMessage(
+                    content=[
+                        {"type": "text", "text": self.SYSTEM_PROMPT},
+                        *image_contents
+                    ]
+                )
+
+                # Get LLM model (with automatic fallback)
+                model = self.llm_manager.get_primary_model()
+
+                # Call LLM
+                logger.debug(f"Calling LLM API with {len(images)} images")
+                response = model.invoke([message])
+
                 elapsed = time.time() - start_time
-                logger.info(f"Gemini API call succeeded in {elapsed:.2f}s")
-                return response
+                provider_info = self.llm_manager.get_provider_metadata()
+                logger.info(
+                    f"LLM API call succeeded in {elapsed:.2f}s "
+                    f"(provider: {provider_info['primary_provider']})"
+                )
+
+                # Return response text and metadata
+                return {
+                    'text': response.content,
+                    'provider': provider_info['primary_provider'],
+                    'provider_metadata': provider_info
+                }
             except Exception as e:
                 elapsed = time.time() - start_time
                 logger.error(
-                    f"Gemini API call failed after {elapsed:.2f}s: "
+                    f"LLM API call failed after {elapsed:.2f}s: "
                     f"{type(e).__name__}: {str(e)}"
                 )
                 raise
@@ -231,21 +290,21 @@ class RecipeAnalyzer:
                     logger.error(f"Failed to load frame {frame_path}: {e}")
                     raise ValueError(f"Cannot load image: {frame_path}")
 
-            logger.info(f"Analyzing {len(images)} images with Gemini Vision (including thumbnail: {thumbnail_url is not None and len(images) > len(frame_paths)})")
+            logger.info(f"Analyzing {len(images)} images with LLM (including thumbnail: {thumbnail_url is not None and len(images) > len(frame_paths)})")
 
-            # Call Gemini API with retry mechanism
-            response = self._call_gemini_api_with_retry(images)
+            # Call LLM API with retry mechanism (supports multiple providers)
+            response = self._call_llm_api_with_retry(images)
 
             # Extract usage metadata for cost tracking
+            # Note: LangChain may not provide token counts for all providers
             usage_metadata = {
-                'prompt_tokens': response.usage_metadata.prompt_token_count,
-                'output_tokens': response.usage_metadata.candidates_token_count,
-                'total_tokens': response.usage_metadata.total_token_count
+                'provider': response['provider'],
+                'provider_metadata': response['provider_metadata']
             }
-            logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+            logger.info(f"Used provider: {response['provider']}")
 
             # Extract JSON from response
-            recipe_data = self._parse_json_response(response.text)
+            recipe_data = self._parse_json_response(response['text'])
 
             # Validate required fields
             self._validate_recipe_data(recipe_data)

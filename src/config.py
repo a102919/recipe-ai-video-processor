@@ -13,8 +13,20 @@ R2_COOKIES_BASE_URL = os.getenv(
     'https://pub-69fc9d7b005d450285cb0cee6d8c0dd5.r2.dev/thumbnails'
 )
 
-# Gemini API configuration
+# Gemini API configuration (backward compatible)
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEYS = os.getenv('GEMINI_API_KEYS', GEMINI_API_KEY or '')
+
+# Grok (xAI) API configuration
+GROK_API_KEY = os.getenv('GROK_API_KEY')
+GROK_API_KEYS = os.getenv('GROK_API_KEYS', GROK_API_KEY or '')
+
+# OpenAI API configuration
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_API_KEYS = os.getenv('OPENAI_API_KEYS', OPENAI_API_KEY or '')
+
+# LLM Provider priority (comma-separated, e.g., "gemini,grok,openai")
+LLM_PROVIDER_PRIORITY = os.getenv('LLM_PROVIDER_PRIORITY', 'gemini,grok,openai')
 
 # Server configuration
 HOST = os.getenv('HOST', '0.0.0.0')

@@ -149,7 +149,15 @@ def analyze_recipe_from_url(
         usage_metadata = analysis_result['usage_metadata']
 
         logger.info(f"Recipe extracted: {recipe_data.get('name', 'Unknown')}")
-        logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+
+        # Log provider info (new LangChain format)
+        if 'provider' in usage_metadata:
+            logger.info(f"LLM Provider: {usage_metadata['provider']}")
+            provider_info = usage_metadata.get('provider_metadata', {})
+            logger.info(f"Provider chain: {provider_info.get('provider_chain', [])}")
+        # Legacy format compatibility
+        elif 'total_tokens' in usage_metadata:
+            logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
 
         # Add thumbnail URL and metadata to recipe data
         recipe_data['thumbnail_url'] = thumbnail_url
@@ -157,7 +165,7 @@ def analyze_recipe_from_url(
         return {
             **recipe_data,
             'metadata': {
-                'gemini_tokens': usage_metadata,
+                'llm_usage': usage_metadata,  # Renamed from 'gemini_tokens' to be provider-agnostic
                 'content_type': 'photo_carousel' if photo_paths else 'video',
                 'video_info': {
                     'duration_seconds': video_duration,

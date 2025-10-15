@@ -158,7 +158,7 @@ def _build_response(
         **recipe_data,
         'thumbnail_url': thumbnail_url,
         'metadata': {
-            'gemini_tokens': usage_metadata,
+            'llm_usage': usage_metadata,  # Renamed from 'gemini_tokens' to be provider-agnostic
             'video_info': video_info
         }
     }
@@ -183,7 +183,11 @@ def _process_image(file_path: str, file_size: int) -> Dict[str, Any]:
     usage_metadata = analysis_result['usage_metadata']
 
     logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
-    logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+    # Log provider info (LangChain format)
+    if 'provider' in usage_metadata:
+        logger.info(f"LLM Provider: {usage_metadata['provider']}")
+    elif 'total_tokens' in usage_metadata:
+        logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
 
     # Upload thumbnail
     thumbnail_url = _upload_thumbnail(file_path)
@@ -233,13 +237,17 @@ def _process_video(file_path: str, file_size: int, temp_dir: str) -> Dict[str, A
             detail="No frames could be extracted from video"
         )
 
-    # Analyze with Gemini Vision
+    # Analyze with LLM (multi-provider support)
     analysis_result = analyze_recipe_from_frames(all_frames)
     recipe_data = analysis_result['recipe']
     usage_metadata = analysis_result['usage_metadata']
 
     logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
-    logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
+    # Log provider info (LangChain format)
+    if 'provider' in usage_metadata:
+        logger.info(f"LLM Provider: {usage_metadata['provider']}")
+    elif 'total_tokens' in usage_metadata:
+        logger.info(f"Token usage: {usage_metadata['total_tokens']} tokens")
 
     # Upload thumbnail (use first frame)
     thumbnail_url = _upload_thumbnail(all_frames[0])
