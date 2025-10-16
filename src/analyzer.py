@@ -186,11 +186,54 @@ class RecipeAnalyzer:
                     f"(provider: {provider_info['primary_provider']})"
                 )
 
+                # Extract token usage from response metadata
+                token_usage = {}
+
+                # Try new-style usage_metadata first (LangChain 0.3+)
+                if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                    usage = response.usage_metadata
+                    # usage_metadata is a dict, not an object
+                    if isinstance(usage, dict):
+                        token_usage = {
+                            'prompt_tokens': usage.get('input_tokens', 0),
+                            'output_tokens': usage.get('output_tokens', 0),
+                            'total_tokens': usage.get('total_tokens', 0)
+                        }
+                    else:
+                        # Fallback to getattr for object-style usage
+                        token_usage = {
+                            'prompt_tokens': getattr(usage, 'input_tokens', 0),
+                            'output_tokens': getattr(usage, 'output_tokens', 0),
+                            'total_tokens': getattr(usage, 'total_tokens', 0)
+                        }
+                # Fallback to response_metadata (older style)
+                elif hasattr(response, 'response_metadata') and response.response_metadata:
+                    metadata = response.response_metadata
+                    # Gemini format
+                    if 'usage_metadata' in metadata:
+                        usage = metadata['usage_metadata']
+                        token_usage = {
+                            'prompt_tokens': usage.get('prompt_token_count', 0),
+                            'output_tokens': usage.get('candidates_token_count', 0),
+                            'total_tokens': usage.get('total_token_count', 0)
+                        }
+                    # OpenAI format
+                    elif 'token_usage' in metadata:
+                        usage = metadata['token_usage']
+                        token_usage = {
+                            'prompt_tokens': usage.get('prompt_tokens', 0),
+                            'output_tokens': usage.get('completion_tokens', 0),
+                            'total_tokens': usage.get('total_tokens', 0)
+                        }
+
+                logger.info(f"Token usage: {token_usage.get('total_tokens', 0)} total tokens")
+
                 # Return response text and metadata
                 return {
                     'text': response.content,
                     'provider': provider_info['primary_provider'],
-                    'provider_metadata': provider_info
+                    'provider_metadata': provider_info,
+                    'token_usage': token_usage
                 }
             except Exception as e:
                 elapsed = time.time() - start_time
@@ -296,12 +339,16 @@ class RecipeAnalyzer:
             response = self._call_llm_api_with_retry(images)
 
             # Extract usage metadata for cost tracking
-            # Note: LangChain may not provide token counts for all providers
+            token_usage = response.get('token_usage', {})
             usage_metadata = {
                 'provider': response['provider'],
-                'provider_metadata': response['provider_metadata']
+                'provider_metadata': response['provider_metadata'],
+                # Flattened token fields (no nested format)
+                **token_usage
             }
             logger.info(f"Used provider: {response['provider']}")
+            if token_usage.get('total_tokens'):
+                logger.info(f"Token usage: {token_usage['total_tokens']} total ({token_usage.get('prompt_tokens', 0)} prompt + {token_usage.get('output_tokens', 0)} output)")
 
             # Extract JSON from response
             recipe_data = self._parse_json_response(response['text'])
@@ -401,13 +448,18 @@ def analyze_recipe_from_frames(
 
     Args:
         frame_paths: List of frame image paths
-        api_key: Gemini API key (optional, uses env var if not provided)
+        api_key: DEPRECATED - API keys are now managed via environment variables
         thumbnail_url: Optional URL or path to video thumbnail/cover image
 
     Returns:
         Dictionary containing:
         - recipe: Parsed recipe data (ingredients, steps, etc.)
-        - usage_metadata: Token usage statistics (prompt_tokens, output_tokens, total_tokens)
+        - usage_metadata: Dict with:
+            - provider: LLM provider used (gemini/grok/openai)
+            - provider_metadata: Provider chain information
+            - prompt_tokens: Input tokens count
+            - output_tokens: Output tokens count
+            - total_tokens: Total tokens count
     """
     analyzer = RecipeAnalyzer(api_key=api_key)
     return analyzer.analyze_frames(frame_paths, thumbnail_url=thumbnail_url)
