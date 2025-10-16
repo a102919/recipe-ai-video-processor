@@ -35,42 +35,77 @@ logger = logging.getLogger(__name__)
 class RecipeAnalyzer:
     """Analyzes video frames using Gemini Vision to extract recipe data"""
 
-    SYSTEM_PROMPT = """分析這些烹飪影片畫面，提取完整食譜資訊。請用繁體中文與台灣用詞輸出 JSON。
+    SYSTEM_PROMPT = """分析這些圖片，提取完整資訊並以「食譜格式」輸出 JSON。請用繁體中文與台灣用詞。
 
 重要說明：
-- 第一張圖是影片的封面圖片，可能包含菜名、成品照片或重要資訊
-- 後續圖片是影片的關鍵幀，展示烹飪過程
+- 第一張圖是影片的封面圖片，可能包含標題、成品照片或重要資訊
+- 後續圖片是影片的關鍵幀，展示過程細節
 
-輸出格式：
+**核心原則：萬物皆可成為「食譜」**
+- 如果是烹飪影片 → 提取真實食譜
+
+**輸出格式**：
 {
-  "name": "菜名",
+  "name": "菜名或主題名稱",
   "description": "簡短描述",
   "ingredients": [
-    {"name": "食材名稱", "amount": "數量", "unit": "單位"}
+    {"name": "材料名稱", "amount": "數量", "unit": "單位"}
   ],
   "steps": [
     {
       "step_number": 1,
       "description": "步驟說明",
       "duration_minutes": 5,
-      "temperature": "溫度（如適用）",
+      "temperature": "溫度或環境",
       "tips": ["這個步驟的訣竅或注意事項"]
     }
   ],
   "servings": 2,
   "prep_time": 10,
   "cook_time": 20,
-  "tags": ["料理類型", "烹飪方式", "難度等級"]
+  "tags": ["標籤"]
 }
 
-要求：
-1. 食譜名稱必須是繁體中文，而且是台灣用詞
-2. 食材必須包含名稱和份量，如果畫面中沒有明確顯示，請標記為 "適量"
-3. 步驟必須按順序排列，包含關鍵的時間和溫度資訊，並在 `tips` 欄位中補充說明關鍵訣竅
-4. 標籤請從以下分類選擇：中式、日式、韓式、泰式、西式、快炒、燉煮、炸物、烘焙、甜點、簡易、進階
-5. 特別注意封面圖中的文字和菜名資訊
+**格式要求**：
+1. name：食譜名稱必須是繁體中文，而且是台灣用詞
+2. description：一句話，不超過20字
+3. steps 的 description：直接描述動作，不加「步驟一」等前綴
+4. tips：實用建議，避免空話
+5. tags：烹飪類（中式、日式、韓式、泰式、西式、快炒、燉煮、炸物、烘焙、甜點、簡易、進階）或非烹飪類（生活、寵物、自然、藝術、運動、療癒、創意、趣味）
+6. **永遠返回 JSON，絕不返回文字說明**
+7. 食材必須包含名稱和份量，如果畫面中沒有明確顯示，請標記為 "適量"
+8. 步驟必須按順序排列，包含關鍵的時間和溫度資訊，並在 `tips` 欄位中補充說明關鍵訣竅
 
 只回傳 JSON，不要其他說明文字。"""
+
+    SINGLE_IMAGE_ADDITIONAL_PROMPT = """
+
+**特別注意：當前只提供一張成品照片**
+
+由於沒有烹飪過程的畫面，請根據成品照片推斷完整的烹飪流程：
+
+1. **食材辨識**：分析成品中包含哪些食材的原始形態
+   - 例如：看到蒲燒鰻魚 → 原料是新鮮鰻魚
+   - 例如：看到白飯 → 原料是生米
+
+2. **食材處理步驟**：推斷每種食材需要的前處理
+   - 清洗、去骨、切割、醃製等
+   - 必須描述具體動作和技巧
+
+3. **烹飪方法推斷**：根據成品狀態推斷烹飪手法
+   - 煎、炒、煮、蒸、烤、炸等
+   - 包含火候、時間、溫度
+
+4. **烹飪順序**：按合理的烹飪邏輯排列步驟
+   - 先處理需時較長的食材
+   - 再處理配菜和醬汁
+   - 最後才是組裝和擺盤
+
+**嚴格要求**：
+- 步驟必須從「處理原始食材」開始，絕不能從「擺盤」或「組裝」開始
+- 每個步驟應描述具體的烹飪動作，不能只寫「將XX切片」這種過於簡化的描述
+- 必須包含關鍵的烹飪技巧和注意事項在 `tips` 欄位中
+"""
 
     def __init__(
         self,
@@ -133,12 +168,13 @@ class RecipeAnalyzer:
         img_str = base64.b64encode(buffered.getvalue()).decode()
         return f"data:image/jpeg;base64,{img_str}"
 
-    def _call_llm_api_with_retry(self, images: List[Image.Image]) -> Dict[str, Any]:
+    def _call_llm_api_with_retry(self, images: List[Image.Image], is_single_image: bool = False) -> Dict[str, Any]:
         """
         Call LLM API with retry mechanism (supports multiple providers)
 
         Args:
             images: List of PIL Image objects
+            is_single_image: True if analyzing single product photo (requires inference)
 
         Returns:
             Dict with response text and metadata
@@ -164,10 +200,18 @@ class RecipeAnalyzer:
                     for img in images
                 ]
 
+                # Select prompt based on image count
+                if is_single_image:
+                    prompt_text = self.SYSTEM_PROMPT + self.SINGLE_IMAGE_ADDITIONAL_PROMPT
+                    logger.info("Using single-image prompt (with inference guidance)")
+                else:
+                    prompt_text = self.SYSTEM_PROMPT
+                    logger.info("Using multi-image prompt (process-based)")
+
                 # Build message
                 message = HumanMessage(
                     content=[
-                        {"type": "text", "text": self.SYSTEM_PROMPT},
+                        {"type": "text", "text": prompt_text},
                         *image_contents
                     ]
                 )
@@ -335,8 +379,13 @@ class RecipeAnalyzer:
 
             logger.info(f"Analyzing {len(images)} images with LLM (including thumbnail: {thumbnail_url is not None and len(images) > len(frame_paths)})")
 
+            # Determine if this is a single product photo (requires inference)
+            is_single_image = len(images) == 1
+            if is_single_image:
+                logger.info("Detected single image - will use inference-based prompt")
+
             # Call LLM API with retry mechanism (supports multiple providers)
-            response = self._call_llm_api_with_retry(images)
+            response = self._call_llm_api_with_retry(images, is_single_image=is_single_image)
 
             # Extract usage metadata for cost tracking
             token_usage = response.get('token_usage', {})
@@ -386,27 +435,66 @@ class RecipeAnalyzer:
 
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """
-        Parse JSON from Gemini response text
+        Parse JSON from LLM response text with creative fallback
 
         Args:
-            response_text: Raw response text from Gemini
+            response_text: Raw response text from LLM
 
         Returns:
-            Parsed JSON object
+            Parsed JSON object (or creative default if LLM refuses)
 
-        Raises:
-            json.JSONDecodeError: If response is not valid JSON
+        Note:
+            If LLM returns non-JSON despite instructions, creates a meta-recipe
+            about "how to analyze mysterious images" for user entertainment
         """
         # Try to extract JSON from response
-        # Sometimes Gemini wraps JSON in markdown code blocks
+        # Sometimes LLMs wrap JSON in markdown code blocks
         # Remove markdown code blocks (```json or ```) using regex
         text = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text.strip(), flags=re.MULTILINE).strip()
 
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON: {text[:200]}...")
-            raise ValueError(f"Invalid JSON response from Gemini: {e}")
+            logger.warning(f"LLM returned non-JSON response, using creative fallback: {text[:200]}...")
+
+            # Extract key phrases from LLM's text response for creative fallback
+            # This turns "LLM refused to generate recipe" into an entertaining meta-recipe
+            return {
+                "name": "神秘圖片分析指南",
+                "description": "當 AI 也不知道該說什麼的時候",
+                "ingredients": [
+                    {"name": "好奇心", "amount": "1", "unit": "份"},
+                    {"name": "想像力", "amount": "適量", "unit": ""},
+                    {"name": "開放的心態", "amount": "滿滿的", "unit": ""}
+                ],
+                "steps": [
+                    {
+                        "step_number": 1,
+                        "description": "仔細觀察圖片中的每個細節",
+                        "duration_minutes": 2,
+                        "temperature": "室溫",
+                        "tips": ["放輕鬆，沒有標準答案"]
+                    },
+                    {
+                        "step_number": 2,
+                        "description": "試著用不同角度理解圖片內容",
+                        "duration_minutes": 3,
+                        "temperature": "舒適環境",
+                        "tips": ["每個人的理解都是獨特的"]
+                    },
+                    {
+                        "step_number": 3,
+                        "description": "接受這可能不是一個傳統的食譜",
+                        "duration_minutes": 1,
+                        "temperature": "常溫",
+                        "tips": ["生活中的驚喜總是意外出現"]
+                    }
+                ],
+                "servings": 1,
+                "prep_time": 1,
+                "cook_time": 5,
+                "tags": ["創意", "趣味", "療癒"]
+            }
 
     def _validate_recipe_data(self, data: Dict[str, Any]) -> None:
         """
