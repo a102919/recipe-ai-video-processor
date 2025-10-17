@@ -20,6 +20,7 @@ from .streaming_extractor import (
     get_video_metadata_only,
     StreamingError
 )
+from .config import EXTRACTION_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def analyze_recipe_from_url(
     cleanup: bool = True,
     api_key: Optional[str] = None,
     frame_count: Optional[int] = None,
-    extraction_mode: str = 'fast',
+    extraction_mode: str = EXTRACTION_MODE,
     use_streaming: bool = False  # Disabled by default: YouTube doesn't support FFmpeg streaming
 ) -> Dict[str, Any]:
     """

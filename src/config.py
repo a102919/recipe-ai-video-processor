@@ -42,3 +42,6 @@ ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', '*')
 PROCESSOR_MODE = os.getenv('PROCESSOR_MODE', 'passive')  # 'passive' or 'active'
 BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://localhost:3000')
 POLL_INTERVAL_MS = int(os.getenv('POLL_INTERVAL_MS', 60000))  # 60 seconds default
+
+# Frame extraction mode configuration
+EXTRACTION_MODE = os.getenv('EXTRACTION_MODE', 'balanced')  # 'fast', 'balanced', or 'accurate'
