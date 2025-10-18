@@ -257,14 +257,3 @@ def get_llm_manager() -> LLMProviderManager:
     if _manager is None:
         _manager = LLMProviderManager()
     return _manager
-
-
-def get_llm_model() -> BaseChatModel:
-    """
-    Get LLM model with automatic fallback
-
-    Returns:
-        LangChain ChatModel instance
-    """
-    manager = get_llm_manager()
-    return manager.get_primary_model()

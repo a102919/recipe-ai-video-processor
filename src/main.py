@@ -109,12 +109,6 @@ async def readiness_check():
     return {"status": status, "checks": checks}
 
 
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {"message": "愛煮小幫手 Video Processor Service (Gemini Vision)"}
-
-
 def _upload_thumbnail(file_path: str) -> str | None:
     """
     Upload thumbnail to R2, return URL or None
