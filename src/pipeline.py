@@ -98,12 +98,13 @@ def analyze_recipe_from_url(
     api_key: Optional[str] = None,
     frame_count: Optional[int] = None,
     extraction_mode: str = EXTRACTION_MODE,
-    use_streaming: bool = False  # Disabled by default: YouTube doesn't support FFmpeg streaming
+    use_streaming: bool = False,  # Disabled by default: YouTube doesn't support FFmpeg streaming
+    frame_selection_strategy: str = 'scene'  # 'uniform', 'scene', or 'hybrid' - Default: scene (captures key moments)
 ) -> Dict[str, Any]:
     """
     Extract recipe from video URL (end-to-end pipeline)
 
-    Version 2.0: Supports streaming frame extraction (3-10x faster)
+    Version 2.1: Supports multiple frame selection strategies
 
     Pipeline stages (streaming mode):
     1. Get video metadata without downloading
@@ -114,7 +115,7 @@ def analyze_recipe_from_url(
 
     Pipeline stages (fallback mode):
     1. Download video from URL
-    2. Extract key frames from video
+    2. Extract key frames from video (using selected strategy)
     3. Analyze frames with Gemini Vision
     4. Return structured recipe data with cost metadata
     5. Cleanup temporary files (optional)
@@ -131,6 +132,10 @@ def analyze_recipe_from_url(
                         - 'accurate': 15-48 frames (maximum quality)
         use_streaming: Try streaming extraction first (default: True)
                       If False or streaming fails, fallback to traditional download
+        frame_selection_strategy: Frame selection strategy (default: 'uniform')
+                                 - 'uniform': Evenly distributed frames (original method)
+                                 - 'scene': FFmpeg scene detection (detects visual changes)
+                                 - 'hybrid': 70% scene detection + 30% uniform
 
     Returns:
         Recipe data dictionary with ingredients, steps, and metadata (tokens, video info)
@@ -240,7 +245,7 @@ def analyze_recipe_from_url(
                     logger.info(f"Using specified frame count: {frame_count} frames")
 
                 # Stage 3: Extract key frames
-                logger.info("Stage 2/3: Extracting frames...")
+                logger.info(f"Stage 2/3: Extracting frames (strategy: {frame_selection_strategy})...")
                 frames_dir = os.path.join(temp_dir, 'frames')
                 # Set max_frames based on video duration to cover entire video
                 # Use 1fps sampling, so max_frames should match duration
@@ -249,7 +254,8 @@ def analyze_recipe_from_url(
                     video_path,
                     frames_dir,
                     count=frame_count,
-                    max_frames=max_frames_needed
+                    max_frames=max_frames_needed,
+                    strategy=frame_selection_strategy
                 )
                 logger.info(f"Extracted {len(all_frames)} frames")
 
