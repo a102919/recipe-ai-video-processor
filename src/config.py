@@ -4,8 +4,14 @@ Centralizes environment variables and default values
 """
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load .env.local first (for local development), fallback to .env
+env_local = Path(__file__).parent.parent / '.env.local'
+if env_local.exists():
+    load_dotenv(env_local)
+else:
+    load_dotenv()
 
 # R2 storage configuration
 R2_COOKIES_BASE_URL = os.getenv(
