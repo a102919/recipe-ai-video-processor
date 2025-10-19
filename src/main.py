@@ -418,6 +418,11 @@ async def process_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns:
         Result dict with recipe and metadata
+
+    Raises:
+        ValueError: If input validation fails
+        NotImplementedError: If processing method not available
+        Exception: If video analysis fails
     """
     job_id = job['job_id']
     video_url = job.get('video_url')
@@ -442,10 +447,86 @@ async def process_job(job: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("No video_url or video_file_id provided")
 
 
+async def _report_job_failure(
+    client,
+    job_id: str,
+    error_message: str,
+    error_type: str = "unknown",
+    retries: int = 3
+) -> bool:
+    """
+    Report job failure to backend with retry logic
+
+    Args:
+        client: httpx AsyncClient
+        job_id: Job ID
+        error_message: Error description
+        error_type: Type of error (validation, processing, network, etc.)
+        retries: Number of retry attempts
+
+    Returns:
+        True if failure was reported successfully, False if all retries failed
+    """
+    for attempt in range(retries):
+        try:
+            failure_payload = {
+                'error_type': error_type,
+                'error_message': error_message,
+                'timestamp': str(__import__('datetime').datetime.utcnow().isoformat())
+            }
+
+            logger.info(
+                f"[Active Mode] Reporting failure for job {job_id} "
+                f"(attempt {attempt + 1}/{retries}): {error_type}"
+            )
+
+            resp = await client.put(
+                f"{BACKEND_API_URL}/v1/analysis/{job_id}/failure",
+                json=failure_payload,
+                timeout=30.0
+            )
+
+            if resp.status_code == 200:
+                logger.info(f"[Active Mode] ✅ Failure reported for job {job_id}")
+                return True
+            else:
+                logger.warning(
+                    f"[Active Mode] Failed to report failure for job {job_id}: "
+                    f"{resp.status_code} - {resp.text[:200]}"
+                )
+
+                # Exponential backoff before retry
+                if attempt < retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.info(f"[Active Mode] Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+
+        except Exception as e:
+            logger.warning(
+                f"[Active Mode] Error reporting failure for job {job_id}: {str(e)}"
+            )
+            if attempt < retries - 1:
+                wait_time = 2 ** attempt
+                await asyncio.sleep(wait_time)
+
+    logger.error(
+        f"[Active Mode] ❌ Failed to report failure for job {job_id} "
+        f"after {retries} attempts"
+    )
+    return False
+
+
 async def active_mode_worker():
     """
     Active mode worker that polls backend API for failed jobs
     Runs indefinitely until application shutdown
+
+    Flow:
+    1. Poll backend for failed jobs
+    2. Process each job (analyze video/images)
+    3. On success: Submit result via PUT /v1/analysis/{job_id}/result
+    4. On failure: Report error via PUT /v1/analysis/{job_id}/failure
+    5. All outcomes are reported back to backend
     """
     import httpx
 
@@ -500,25 +581,65 @@ async def active_mode_worker():
                         # Process the job
                         result = await process_job(job)
 
-                        # 3. Submit result back to backend
+                        # 3. Submit result back to backend (success path)
                         logger.info(f"[Active Mode] Submitting result for job {job_id}")
                         submit_resp = await client.put(
                             f"{BACKEND_API_URL}/v1/analysis/{job_id}/result",
-                            json=result
+                            json=result,
+                            timeout=30.0
                         )
 
                         if submit_resp.status_code == 200:
                             logger.info(f"[Active Mode] ✅ Job {job_id} completed successfully")
                         else:
-                            logger.error(
-                                f"[Active Mode] ❌ Failed to submit result for job {job_id}: "
-                                f"{submit_resp.status_code} - {submit_resp.text}"
+                            # Failed to submit result - report this as failure
+                            error_msg = (
+                                f"Failed to submit result: "
+                                f"{submit_resp.status_code} - {submit_resp.text[:200]}"
+                            )
+                            logger.error(f"[Active Mode] {error_msg}")
+                            await _report_job_failure(
+                                client,
+                                job_id,
+                                error_msg,
+                                error_type="submission_failure"
                             )
 
+                    except ValueError as e:
+                        # Input validation error
+                        error_msg = f"Invalid job input: {str(e)}"
+                        logger.error(f"[Active Mode] ❌ Job {job_id} validation error: {error_msg}")
+                        await _report_job_failure(
+                            client,
+                            job_id,
+                            error_msg,
+                            error_type="validation_error"
+                        )
+
+                    except NotImplementedError as e:
+                        # Feature not implemented
+                        error_msg = f"Feature not implemented: {str(e)}"
+                        logger.error(f"[Active Mode] ❌ Job {job_id} not implemented: {error_msg}")
+                        await _report_job_failure(
+                            client,
+                            job_id,
+                            error_msg,
+                            error_type="not_implemented"
+                        )
+
                     except Exception as e:
-                        logger.error(f"[Active Mode] ❌ Job {job_id} failed: {str(e)}", exc_info=True)
-                        # Continue to next job
-                        continue
+                        # Generic processing error
+                        error_msg = str(e)
+                        logger.error(
+                            f"[Active Mode] ❌ Job {job_id} processing failed: {error_msg}",
+                            exc_info=True
+                        )
+                        await _report_job_failure(
+                            client,
+                            job_id,
+                            error_msg,
+                            error_type="processing_error"
+                        )
 
         except Exception as e:
             logger.error(f"[Active Mode] Polling error: {str(e)}", exc_info=True)
