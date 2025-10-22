@@ -14,7 +14,8 @@ try:
         GEMINI_API_KEYS,
         GROK_API_KEYS,
         OPENAI_API_KEYS,
-        LLM_PROVIDER_PRIORITY
+        LLM_PROVIDER_PRIORITY,
+        GEMINI_MODEL
     )
 except ImportError:
     # Fallback for direct imports (e.g., testing)
@@ -22,7 +23,8 @@ except ImportError:
         GEMINI_API_KEYS,
         GROK_API_KEYS,
         OPENAI_API_KEYS,
-        LLM_PROVIDER_PRIORITY
+        LLM_PROVIDER_PRIORITY,
+        GEMINI_MODEL
     )
 
 logger = logging.getLogger(__name__)
@@ -166,7 +168,7 @@ class LLMProviderManager:
     def _create_gemini_model(self, api_key: str) -> BaseChatModel:
         """Create Gemini model instance"""
         return ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",
+            model=GEMINI_MODEL,
             google_api_key=api_key,
             temperature=0.7
         )

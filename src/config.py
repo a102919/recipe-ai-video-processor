@@ -51,3 +51,6 @@ POLL_INTERVAL_MS = int(os.getenv('POLL_INTERVAL_MS', 60000))  # 60 seconds defau
 
 # Frame extraction mode configuration
 EXTRACTION_MODE = os.getenv('EXTRACTION_MODE', 'balanced')  # 'fast', 'balanced', or 'accurate'
+
+# Gemini model configuration
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
