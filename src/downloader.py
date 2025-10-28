@@ -367,10 +367,10 @@ class VideoDownloader:
 
     def _process_thumbnail(self, info: dict, video_path: Optional[str] = None) -> Optional[str]:
         """
-        Process thumbnail URL, proxying through R2 if needed for CORS
+        Process thumbnail URL, uploading all thumbnails to R2
 
-        Fallback strategy for Instagram:
-        1. Try to download thumbnail from Instagram CDN and upload to R2
+        Strategy:
+        1. Try to download thumbnail from source and upload to R2
         2. If that fails (403, timeout, etc.), extract frame from video and upload to R2
 
         Args:
@@ -391,36 +391,28 @@ class VideoDownloader:
                 return self._extract_and_upload_thumbnail(video_path)
             return None
 
-        # Check if thumbnail needs CORS proxy (Instagram only)
-        needs_proxy = any(domain in thumbnail_url.lower() for domain in [
-            'instagram', 'cdninstagram'
-        ])
+        # Upload all thumbnails to R2 (not just Instagram)
+        logger.info(f"🔍 Uploading thumbnail to R2...")
+        logger.info(f"   Original URL: {thumbnail_url[:80]}...")
+        try:
+            r2_thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
+            logger.info(f"✅ Successfully uploaded to R2!")
+            logger.info(f"   R2 URL: {r2_thumbnail_url}")
+            return r2_thumbnail_url
+        except Exception as e:
+            logger.error(f"❌ R2 upload FAILED - CDN blocked or URL expired")
+            logger.error(f"   Error type: {type(e).__name__}")
+            logger.error(f"   Error message: {str(e)}")
+            logger.exception("   Full traceback:")
 
-        if needs_proxy:
-            logger.info(f"🔍 Detected Instagram thumbnail (CORS-blocked), proxying to R2...")
-            logger.info(f"   Original URL: {thumbnail_url[:80]}...")
-            try:
-                r2_thumbnail_url = proxy_thumbnail_to_r2(thumbnail_url)
-                logger.info(f"✅ Successfully proxied to R2!")
-                logger.info(f"   R2 URL: {r2_thumbnail_url}")
-                return r2_thumbnail_url
-            except Exception as e:
-                logger.error(f"❌ R2 proxy FAILED - Instagram CDN blocked or URL expired")
-                logger.error(f"   Error type: {type(e).__name__}")
-                logger.error(f"   Error message: {str(e)}")
-                logger.exception("   Full traceback:")
-
-                # Fallback: Extract thumbnail from video
-                if video_path:
-                    logger.info("🔄 Attempting fallback: extracting thumbnail from video...")
-                    return self._extract_and_upload_thumbnail(video_path)
-                else:
-                    logger.warning(f"⚠️  No video path available for fallback, using original Instagram URL")
-                    logger.warning(f"⚠️  Frontend may encounter CORS issues with this URL!")
-                    return thumbnail_url
-        else:
-            logger.info(f"✓ Thumbnail URL (no proxy needed): {thumbnail_url[:80]}...")
-            return thumbnail_url
+            # Fallback: Extract thumbnail from video
+            if video_path:
+                logger.info("🔄 Attempting fallback: extracting thumbnail from video...")
+                return self._extract_and_upload_thumbnail(video_path)
+            else:
+                logger.warning(f"⚠️  No video path available for fallback, using original URL")
+                logger.warning(f"⚠️  Frontend may encounter CORS issues with this URL!")
+                return thumbnail_url
 
     def _extract_and_upload_thumbnail(self, video_path: str) -> Optional[str]:
         """

@@ -172,13 +172,19 @@ class RecipeAnalyzer:
         img_str = base64.b64encode(buffered.getvalue()).decode()
         return f"data:image/jpeg;base64,{img_str}"
 
-    def _call_llm_api_with_retry(self, images: List[Image.Image], is_single_image: bool = False) -> Dict[str, Any]:
+    def _call_llm_api_with_retry(
+        self,
+        images: List[Image.Image],
+        is_single_image: bool = False,
+        existing_recipe_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Call LLM API with retry mechanism (supports multiple providers)
 
         Args:
             images: List of PIL Image objects
             is_single_image: True if analyzing single product photo (requires inference)
+            existing_recipe_context: Optional previous analysis results for reanalysis context
 
         Returns:
             Dict with response text and metadata
@@ -211,6 +217,31 @@ class RecipeAnalyzer:
                 else:
                     prompt_text = self.SYSTEM_PROMPT
                     logger.info("Using multi-image prompt (process-based)")
+
+                # Add previous analysis context if reanalysis
+                if existing_recipe_context:
+                    logger.info("Adding previous analysis context for improved accuracy")
+                    context_prompt = f"""
+
+**重新解析模式：參考先前的分析結果**
+
+以下是先前對這個影片的分析結果，請參考這些資訊，並根據影片內容提供更準確、更詳細的改進版本：
+
+先前的分析結果：
+```json
+{json.dumps(existing_recipe_context, ensure_ascii=False, indent=2)}
+```
+
+**重新解析要求：**
+1. 仔細比對影片內容與先前分析，修正任何不準確的地方
+2. 補充先前遺漏的食材或步驟細節
+3. 改進步驟描述的清晰度和可操作性
+4. 如果先前分析已經很準確，可以保持相同內容但提供更詳細的說明
+5. 保持 JSON 格式輸出，不要返回文字說明
+
+請輸出改進後的完整食譜 JSON。
+"""
+                    prompt_text += context_prompt
 
                 # Build message
                 message = HumanMessage(
@@ -337,7 +368,9 @@ class RecipeAnalyzer:
     def analyze_frames(
         self,
         frame_paths: List[str],
-        thumbnail_url: Optional[str] = None
+        thumbnail_url: Optional[str] = None,
+        is_incremental: bool = False,
+        existing_recipe_context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Analyze video frames to extract recipe information
@@ -346,6 +379,8 @@ class RecipeAnalyzer:
             frame_paths: List of paths to frame images
             thumbnail_url: Optional URL or path to video thumbnail/cover image
                           If provided, this will be inserted as the first image for analysis
+            is_incremental: If True, use supplementary analysis prompt
+            existing_recipe_context: Existing recipe data for incremental context
 
         Returns:
             Dictionary containing recipe data and metadata
@@ -389,7 +424,12 @@ class RecipeAnalyzer:
                 logger.info("Detected single image - will use inference-based prompt")
 
             # Call LLM API with retry mechanism (supports multiple providers)
-            response = self._call_llm_api_with_retry(images, is_single_image=is_single_image)
+            # Pass existing_recipe_context for reanalysis context
+            response = self._call_llm_api_with_retry(
+                images,
+                is_single_image=is_single_image,
+                existing_recipe_context=existing_recipe_context
+            )
 
             # Extract usage metadata for cost tracking
             token_usage = response.get('token_usage', {})
@@ -533,7 +573,9 @@ class RecipeAnalyzer:
 def analyze_recipe_from_frames(
     frame_paths: List[str],
     api_key: Optional[str] = None,
-    thumbnail_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None,
+    is_incremental: bool = False,
+    existing_recipe_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Analyze recipe from video frames
@@ -542,6 +584,8 @@ def analyze_recipe_from_frames(
         frame_paths: List of frame image paths
         api_key: DEPRECATED - API keys are now managed via environment variables
         thumbnail_url: Optional URL or path to video thumbnail/cover image
+        is_incremental: If True, treat this as a supplementary analysis (default: False)
+        existing_recipe_context: Existing recipe data for incremental analysis context
 
     Returns:
         Dictionary containing:
@@ -554,4 +598,9 @@ def analyze_recipe_from_frames(
             - total_tokens: Total tokens count
     """
     analyzer = RecipeAnalyzer(api_key=api_key)
-    return analyzer.analyze_frames(frame_paths, thumbnail_url=thumbnail_url)
+    return analyzer.analyze_frames(
+        frame_paths,
+        thumbnail_url=thumbnail_url,
+        is_incremental=is_incremental,
+        existing_recipe_context=existing_recipe_context
+    )

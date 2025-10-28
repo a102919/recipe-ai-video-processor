@@ -99,7 +99,8 @@ def analyze_recipe_from_url(
     frame_count: Optional[int] = None,
     extraction_mode: str = EXTRACTION_MODE,
     use_streaming: bool = False,  # Disabled by default: YouTube doesn't support FFmpeg streaming
-    frame_selection_strategy: str = 'scene'  # 'uniform', 'scene', or 'hybrid' - Default: scene (captures key moments)
+    frame_selection_strategy: str = 'scene',  # 'uniform', 'scene', or 'hybrid' - Default: scene (captures key moments)
+    previous_recipe_context: Optional[Dict[str, Any]] = None  # Previous analysis for reanalysis context
 ) -> Dict[str, Any]:
     """
     Extract recipe from video URL (end-to-end pipeline)
@@ -262,12 +263,17 @@ def analyze_recipe_from_url(
                 if not all_frames:
                     raise ValueError("No frames extracted from video")
 
-        # Stage 4: Analyze with Gemini Vision (including thumbnail)
+        # Stage 4: Analyze with Gemini Vision (including thumbnail and previous context)
         logger.info("Stage 3/3: Analyzing with Gemini Vision...")
+        if previous_recipe_context:
+            logger.info("Using previous analysis as reference for improved accuracy")
+
         analysis_result = analyze_recipe_from_frames(
             all_frames,
             api_key=api_key,
-            thumbnail_url=thumbnail_url
+            thumbnail_url=thumbnail_url,
+            is_incremental=bool(previous_recipe_context),
+            existing_recipe_context=previous_recipe_context
         )
         recipe_data = analysis_result['recipe']
         usage_metadata = analysis_result['usage_metadata']
@@ -323,4 +329,146 @@ def analyze_recipe_from_url(
                 logger.warning(f"Failed to cleanup {temp_dir}: {e}")
 
         # Force garbage collection after video processing to free memory
+        gc.collect()
+
+
+def run_incremental_analysis(
+    url: str,
+    excluded_frame_indices: list[int],
+    existing_recipe: Optional[Dict[str, Any]] = None,
+    cleanup: bool = True,
+    api_key: Optional[str] = None,
+    frame_count: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Incremental analysis: Extract and analyze additional frames from a video
+    that weren't analyzed in the original analysis.
+
+    This is useful for getting more detailed recipes by analyzing supplementary frames
+    and then merging results intelligently.
+
+    Args:
+        url: Video URL
+        excluded_frame_indices: List of frame indices already analyzed (e.g., [1, 16, 31, ...])
+        existing_recipe: The existing recipe data (used in LLM prompt for context)
+        cleanup: Remove temporary files after processing
+        api_key: Gemini API key
+        frame_count: Number of new frames to extract
+                    If None, auto-calculated based on video duration
+
+    Returns:
+        Recipe data from supplementary frames, with frame indices of analyzed frames
+
+    Example:
+        # First analysis: 12 frames analyzed at indices [1, 16, 31, 46, 61, 76, 91, 106, 121, 136, 151, 166]
+        # Incremental analysis: analyze 24 more frames from remaining frames
+        result = run_incremental_analysis(
+            url="https://...",
+            excluded_frame_indices=[1, 16, 31, 46, 61, 76, 91, 106, 121, 136, 151, 166],
+            existing_recipe={"name": "Braise", "ingredients": [...]}
+        )
+    """
+    temp_dir = None
+    video_path = None
+    all_extracted_frames = []
+
+    try:
+        temp_dir = tempfile.mkdtemp(prefix='recipeai_incremental_')
+        logger.info(f"Incremental analysis started for URL: {url}")
+        logger.info(f"Excluded frame indices: {excluded_frame_indices}")
+        logger.info(f"Using Hybrid extraction mode (highest precision)")
+
+        # Stage 1: Download video
+        logger.info("Stage 1/3: Downloading content...")
+        video_path, thumbnail_url, photo_paths = download_video(url, output_dir=temp_dir)
+
+        # Handle photo carousel (no incremental analysis for photos)
+        if photo_paths:
+            logger.warning("Photo carousel detected - incremental analysis not supported")
+            raise ValueError("Incremental analysis requires video input, not photo carousel")
+
+        # Get video metadata
+        metadata = get_video_metadata(video_path)
+        video_duration = metadata['duration']
+        video_file_size = metadata['size']
+        logger.info(f"Video duration: {video_duration}s, size: {video_file_size} bytes")
+
+        # Auto-calculate frame count for incremental analysis
+        # Use 'accurate' mode to get maximum detail
+        if frame_count is None:
+            # For incremental, use higher frame count than original
+            # If original was 12 frames, increment by 24 frames
+            frame_count = calculate_optimal_frame_count(int(video_duration), mode='accurate')
+            logger.info(f"Auto-calculated incremental frame count: {frame_count} frames (accurate mode)")
+
+        # Stage 2: Extract ALL frames first (for comparison)
+        logger.info(f"Stage 2/3: Extracting frames (hybrid strategy for max detail)...")
+        frames_dir = os.path.join(temp_dir, 'frames')
+        max_frames_needed = max(int(video_duration) + 10, 200)
+
+        # Extract with maximum detail using hybrid strategy
+        all_extracted_frames = extract_key_frames(
+            video_path,
+            frames_dir,
+            count=frame_count,
+            max_frames=max_frames_needed,
+            strategy='hybrid'  # Use hybrid for maximum detail
+        )
+        logger.info(f"Extracted {len(all_extracted_frames)} frames total")
+
+        if not all_extracted_frames:
+            raise ValueError("No frames extracted from video")
+
+        # Stage 3: Analyze with context about existing recipe
+        logger.info("Stage 3/3: Analyzing supplementary frames with Gemini Vision...")
+
+        # Prepare context about existing recipe for the prompt
+        recipe_context = existing_recipe if existing_recipe else {}
+
+        # Create enhanced analysis result with incremental context
+        analysis_result = analyze_recipe_from_frames(
+            all_extracted_frames,
+            api_key=api_key,
+            thumbnail_url=thumbnail_url,
+            is_incremental=True,
+            existing_recipe_context=recipe_context
+        )
+
+        recipe_data = analysis_result['recipe']
+        usage_metadata = analysis_result['usage_metadata']
+
+        logger.info(f"Incremental recipe extracted: {recipe_data.get('name', 'Unknown')}")
+        logger.info(f"Token usage: {usage_metadata.get('total_tokens', 'N/A')} tokens")
+
+        # Return result with frame indices for tracking
+        return {
+            **recipe_data,
+            'metadata': {
+                'llm_usage': usage_metadata,
+                'is_incremental': True,
+                'extraction_method': 'download',
+                'video_info': {
+                    'duration_seconds': video_duration,
+                    'file_size_bytes': video_file_size,
+                    'frames_extracted': len(all_extracted_frames),
+                    'frames_analyzed': len(all_extracted_frames),
+                    'frame_indices': list(range(1, len(all_extracted_frames) + 1))  # Frame indices for this analysis
+                }
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Incremental analysis failed: {e}", exc_info=True)
+        raise
+
+    finally:
+        # Cleanup temporary files
+        if cleanup and temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temp directory: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup {temp_dir}: {e}")
+
+        # Force garbage collection
         gc.collect()

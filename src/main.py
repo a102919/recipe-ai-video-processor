@@ -11,8 +11,9 @@ import shutil
 import logging
 import asyncio
 import gc
+import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from .extractor import extract_key_frames
 from .analyzer import analyze_recipe_from_frames
@@ -364,7 +365,10 @@ async def analyze_video(video: UploadFile = File(...)):
 
 
 @app.post("/analyze-from-url")
-async def analyze_video_from_url(video_url: str = Form(...)):
+async def analyze_video_from_url(
+    video_url: str = Form(...),
+    previous_analysis: Optional[str] = Form(None)
+):
     """
     Analyze cooking video from URL using Gemini Vision API
 
@@ -372,12 +376,13 @@ async def analyze_video_from_url(video_url: str = Form(...)):
     1. Download video from URL (YouTube, Instagram, Facebook, etc.)
     2. Extract frames at 1fps using FFmpeg
     3. Select 12 key frames (evenly distributed)
-    4. Analyze with Gemini Vision API
+    4. Analyze with Gemini Vision API (optionally using previous analysis as context)
     5. Return structured recipe JSON
     6. Cleanup temp files
 
     Args:
         video_url: Video URL (supports YouTube, Instagram, Facebook, etc.)
+        previous_analysis: Optional JSON string of previous analysis results for reanalysis context
 
     Returns:
         Recipe JSON with name, ingredients, steps, tags, completeness status
@@ -385,8 +390,21 @@ async def analyze_video_from_url(video_url: str = Form(...)):
     try:
         logger.info(f"Analyzing video from URL: {video_url}")
 
+        # Parse previous analysis if provided
+        previous_recipe_context = None
+        if previous_analysis:
+            try:
+                previous_recipe_context = json.loads(previous_analysis)
+                logger.info("Using previous analysis as reference context for improved accuracy")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse previous_analysis JSON: {e}")
+
         # Use pipeline to handle download -> extract -> analyze
-        recipe_data = analyze_recipe_from_url(video_url, cleanup=True)
+        recipe_data = analyze_recipe_from_url(
+            video_url,
+            cleanup=True,
+            previous_recipe_context=previous_recipe_context
+        )
 
         logger.info(f"Analysis complete: {recipe_data.get('name', 'Unknown')}")
         return recipe_data
@@ -433,8 +451,9 @@ async def process_job(job: Dict[str, Any]) -> Dict[str, Any]:
     # Choose processing method based on input type
     if video_url:
         logger.info(f"[Active Mode] Analyzing from URL: {video_url}")
-        # Use existing analyze_recipe_from_url function
-        recipe_data = analyze_recipe_from_url(video_url, cleanup=True)
+        # Use existing analyze_recipe_from_url function with 'uniform' frame selection
+        # (scene detection not reliable on all FFmpeg versions)
+        recipe_data = analyze_recipe_from_url(video_url, cleanup=True, frame_selection_strategy='uniform')
 
         return {
             'recipe': recipe_data,
