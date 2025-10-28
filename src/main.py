@@ -445,15 +445,33 @@ async def process_job(job: Dict[str, Any]) -> Dict[str, Any]:
     job_id = job['job_id']
     video_url = job.get('video_url')
     video_file_id = job.get('video_file_id')
+    recipe_id = job.get('recipe_id')  # Check if this is reanalysis
+    metadata = job.get('metadata', {})
 
     logger.info(f"[Active Mode] Processing job {job_id}")
+    logger.info(f"[Active Mode] recipe_id: {recipe_id} (reanalysis={recipe_id is not None})")
+
+    # Extract previous_analysis from metadata for reanalysis
+    previous_recipe_context = None
+    if metadata and isinstance(metadata, dict):
+        previous_analysis = metadata.get('previous_analysis')
+        if previous_analysis:
+            logger.info(f"[Active Mode] Found previous_analysis in metadata, using for context")
+            previous_recipe_context = previous_analysis
+        else:
+            logger.info(f"[Active Mode] No previous_analysis in metadata")
 
     # Choose processing method based on input type
     if video_url:
         logger.info(f"[Active Mode] Analyzing from URL: {video_url}")
         # Use existing analyze_recipe_from_url function with 'uniform' frame selection
         # (scene detection not reliable on all FFmpeg versions)
-        recipe_data = analyze_recipe_from_url(video_url, cleanup=True, frame_selection_strategy='uniform')
+        recipe_data = analyze_recipe_from_url(
+            video_url,
+            cleanup=True,
+            frame_selection_strategy='uniform',
+            previous_recipe_context=previous_recipe_context  # Pass context for reanalysis
+        )
 
         return {
             'recipe': recipe_data,
