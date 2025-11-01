@@ -364,6 +364,92 @@ async def analyze_video(video: UploadFile = File(...)):
                 logger.warning(f"Failed to cleanup {temp_dir}: {e}")
 
 
+@app.post("/analyze-thumbnail-quick")
+async def analyze_thumbnail_quick(
+    thumbnail: UploadFile = File(None),
+    thumbnail_url: str = Form(None)
+):
+    """
+    Quick thumbnail-only analysis for Phase 1 of two-phase analysis
+    Extracts recipe name only (no ingredients/steps)
+
+    Process:
+    1. Load thumbnail from upload or URL
+    2. Call Gemini with quick name-only prompt
+    3. Return recipe name and metadata
+    4. Time: 3-8 seconds (within reply token validity)
+
+    Args:
+        thumbnail: Optional uploaded thumbnail file
+        thumbnail_url: Optional thumbnail URL (if not uploading file)
+
+    Returns:
+        Quick analysis result with recipe name and token usage
+    """
+    temp_dir = None
+
+    try:
+        # Get thumbnail source (upload or URL)
+        if thumbnail:
+            # Save uploaded file
+            temp_dir = tempfile.mkdtemp(prefix='recipeai_quick_')
+            temp_file_path = os.path.join(temp_dir, f"thumb_{os.urandom(4).hex()}.jpg")
+
+            with open(temp_file_path, 'wb') as f:
+                shutil.copyfileobj(thumbnail.file, f)
+
+            logger.info(f"Saved uploaded thumbnail: {temp_file_path}")
+            analysis_source = temp_file_path
+
+        elif thumbnail_url:
+            logger.info(f"Using thumbnail URL: {thumbnail_url[:80]}...")
+            analysis_source = thumbnail_url
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either 'thumbnail' file or 'thumbnail_url' must be provided"
+            )
+
+        # Perform quick analysis
+        from .analyzer import RecipeAnalyzer
+        analyzer = RecipeAnalyzer()
+        result = analyzer.analyze_thumbnail_quick(analysis_source)
+
+        logger.info(f"✅ Quick analysis complete: {result['name']}")
+
+        # Build response with name and metadata
+        return {
+            'name': result['name'],
+            'metadata': {
+                'llm_usage': result['usage_metadata'],
+                'analysis_type': 'quick_thumbnail'
+            }
+        }
+
+    except ValueError as e:
+        logger.error(f"Quick analysis validation error: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Quick thumbnail analysis failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Quick analysis failed: {str(e)}"
+        )
+
+    finally:
+        # Cleanup temp files
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temp dir: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup {temp_dir}: {e}")
+
+
 @app.post("/analyze-from-url")
 async def analyze_video_from_url(
     video_url: str = Form(...),

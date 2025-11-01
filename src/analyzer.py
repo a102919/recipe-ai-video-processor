@@ -111,6 +111,19 @@ class RecipeAnalyzer:
 - 必須包含關鍵的烹飪技巧和注意事項在 `tips` 欄位中
 """
 
+    QUICK_NAME_ONLY_PROMPT = """分析這張圖片，只提取「菜名」，不要提供完整食譜。
+
+**重要說明：**
+- 這是影片的縮圖或成品照片
+- 只需要辨識菜名，不需要食材或步驟
+
+**輸出格式**：
+{
+  "name": "菜名（繁體中文，台灣用詞）"
+}
+
+只回傳 JSON，不要其他說明文字。"""
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -539,6 +552,177 @@ class RecipeAnalyzer:
                 "cook_time": 5,
                 "tags": ["創意", "趣味", "療癒"]
             }
+
+    def analyze_thumbnail_quick(
+        self,
+        thumbnail_url: str
+    ) -> Dict[str, Any]:
+        """
+        Quick thumbnail-only analysis to extract recipe name only
+        Used for Phase 1 of two-phase analysis (fast reply)
+
+        Args:
+            thumbnail_url: URL or local path to thumbnail image
+
+        Returns:
+            Dictionary containing:
+            - name: Recipe name only
+            - usage_metadata: Token usage information
+
+        Raises:
+            ValueError: If thumbnail cannot be loaded
+            Exception: If API call fails
+        """
+        try:
+            logger.info(f"Quick analysis: Loading thumbnail from {thumbnail_url[:80]}...")
+
+            # Load thumbnail image
+            thumbnail_img = self._load_thumbnail(thumbnail_url)
+            if not thumbnail_img:
+                raise ValueError(f"Cannot load thumbnail from {thumbnail_url}")
+
+            logger.info("Quick analysis: Thumbnail loaded, calling Gemini for name extraction...")
+
+            # Call LLM with quick name-only prompt
+            response = self._call_llm_api_quick(thumbnail_img)
+
+            # Extract token usage
+            token_usage = response.get('token_usage', {})
+            usage_metadata = {
+                'provider': response['provider'],
+                'provider_metadata': response['provider_metadata'],
+                **token_usage
+            }
+
+            logger.info(f"Quick analysis token usage: {token_usage.get('total_tokens', 0)} tokens")
+
+            # Parse JSON response
+            recipe_data = self._parse_json_quick_response(response['text'])
+
+            # Validate name field exists
+            if 'name' not in recipe_data:
+                raise ValueError("Quick analysis failed: 'name' field not found in response")
+
+            logger.info(f"Quick analysis complete: {recipe_data['name']}")
+
+            return {
+                'name': recipe_data['name'],
+                'usage_metadata': usage_metadata
+            }
+
+        except Exception as e:
+            logger.error(f"Quick thumbnail analysis failed: {type(e).__name__}: {str(e)}", exc_info=True)
+            raise
+        finally:
+            # Close image to free file handle
+            if 'thumbnail_img' in locals():
+                try:
+                    thumbnail_img.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close thumbnail image: {e}")
+
+    def _call_llm_api_quick(
+        self,
+        image: Image.Image
+    ) -> Dict[str, Any]:
+        """
+        Call LLM API with quick name-only prompt (no retry, fast path)
+
+        Args:
+            image: PIL Image object (thumbnail)
+
+        Returns:
+            Dict with response text and metadata
+        """
+        start_time = time.time()
+        try:
+            # Convert image to base64
+            image_content = {"type": "image_url", "image_url": {"url": self._image_to_base64(image)}}
+
+            # Build message with quick name-only prompt
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": self.QUICK_NAME_ONLY_PROMPT},
+                    image_content
+                ]
+            )
+
+            # Get LLM model
+            model = self.llm_manager.get_primary_model()
+
+            # Call LLM (no retry for quick analysis)
+            logger.debug("Calling LLM API with quick name-only prompt")
+            response = model.invoke([message])
+
+            elapsed = time.time() - start_time
+            provider_info = self.llm_manager.get_provider_metadata()
+            logger.info(
+                f"Quick LLM API call succeeded in {elapsed:.2f}s "
+                f"(provider: {provider_info['primary_provider']})"
+            )
+
+            # Extract token usage
+            token_usage = {}
+
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage = response.usage_metadata
+                if isinstance(usage, dict):
+                    token_usage = {
+                        'prompt_tokens': usage.get('input_tokens', 0),
+                        'output_tokens': usage.get('output_tokens', 0),
+                        'total_tokens': usage.get('total_tokens', 0)
+                    }
+            elif hasattr(response, 'response_metadata') and response.response_metadata:
+                metadata = response.response_metadata
+                if 'usage_metadata' in metadata:
+                    usage = metadata['usage_metadata']
+                    token_usage = {
+                        'prompt_tokens': usage.get('prompt_token_count', 0),
+                        'output_tokens': usage.get('candidates_token_count', 0),
+                        'total_tokens': usage.get('total_token_count', 0)
+                    }
+
+            logger.info(f"Token usage: {token_usage.get('total_tokens', 0)} tokens")
+
+            return {
+                'text': response.content,
+                'provider': provider_info['primary_provider'],
+                'provider_metadata': provider_info,
+                'token_usage': token_usage
+            }
+
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"Quick LLM API call failed after {elapsed:.2f}s: "
+                f"{type(e).__name__}: {str(e)}"
+            )
+            raise
+
+    def _parse_json_quick_response(self, response_text: str) -> Dict[str, Any]:
+        """
+        Parse JSON from quick name-only response
+
+        Args:
+            response_text: Raw response text from LLM
+
+        Returns:
+            Parsed JSON object with 'name' field
+
+        Raises:
+            ValueError: If 'name' field not found
+        """
+        # Remove markdown code blocks
+        text = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text.strip(), flags=re.MULTILINE).strip()
+
+        try:
+            data = json.loads(text)
+            if 'name' not in data:
+                raise ValueError("Response missing 'name' field")
+            return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse quick response JSON: {text[:200]}...")
+            raise ValueError(f"Invalid JSON response: {str(e)}")
 
     def _validate_recipe_data(self, data: Dict[str, Any]) -> None:
         """
