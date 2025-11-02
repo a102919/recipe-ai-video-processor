@@ -424,6 +424,194 @@ async def analyze_video_from_url(
         )
 
 
+@app.post("/analyze-thumbnail-quick")
+async def analyze_thumbnail_quick(thumbnail: UploadFile = File(...)):
+    """
+    Quick thumbnail-only analysis for Phase 1 of two-phase video analysis
+
+    Extracts only the recipe name from a thumbnail image (< 5 seconds)
+    Used to provide immediate feedback to user while full analysis proceeds in background
+
+    Args:
+        thumbnail: Uploaded thumbnail image file
+
+    Returns:
+        Minimal response with recipe name and thumbnail URL
+    """
+    temp_dir = None
+
+    try:
+        # Create temporary directory
+        temp_dir = tempfile.mkdtemp(prefix='recipeai_quick_')
+        logger.info(f"Quick analysis: Created temp dir: {temp_dir}")
+
+        # Detect file type
+        content_type = thumbnail.content_type or ''
+        filename = thumbnail.filename or ''
+        is_image = _is_image_file(content_type, filename)
+
+        if not is_image:
+            raise HTTPException(
+                status_code=400,
+                detail="Quick analysis requires an image file, not a video"
+            )
+
+        # Save uploaded file
+        file_path = _save_uploaded_file(thumbnail, temp_dir, is_image=True)
+
+        logger.info(f"Quick analysis: Analyzing thumbnail: {file_path}")
+
+        # Import analyzer
+        from .analyzer import RecipeAnalyzer
+
+        # Create analyzer instance
+        analyzer = RecipeAnalyzer()
+
+        # Perform quick analysis (name only)
+        result = analyzer.analyze_thumbnail_quick(file_path)
+
+        logger.info(f"Quick analysis: Extracted name: {result['name']}")
+
+        # Upload thumbnail to R2
+        thumbnail_url = _upload_thumbnail(file_path)
+
+        # Return minimal response
+        return {
+            'name': result['name'],
+            'thumbnail_url': thumbnail_url,
+            'metadata': {
+                'llm_usage': result.get('usage_metadata', {})
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Quick thumbnail analysis failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Quick thumbnail analysis failed: {str(e)}"
+        )
+
+    finally:
+        # Cleanup temp files
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Quick analysis: Cleaned up temp dir: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup {temp_dir}: {e}")
+
+
+@app.post("/analyze-thumbnail-quick-from-url")
+async def analyze_thumbnail_quick_from_url(video_url: str = Form(...)):
+    """
+    Quick thumbnail-only analysis for Phase 1 of two-phase URL analysis
+
+    Extracts thumbnail from video URL and performs quick analysis (< 20 seconds)
+    Used to provide immediate feedback to user while full analysis proceeds in background
+
+    Args:
+        video_url: URL of video to analyze (YouTube, Instagram, Facebook, TikTok)
+
+    Returns:
+        Minimal response with recipe name and thumbnail URL
+    """
+    temp_dir = None
+
+    try:
+        # Create temporary directory
+        temp_dir = tempfile.mkdtemp(prefix='recipeai_url_quick_')
+        logger.info(f"[URL Quick] Created temp dir: {temp_dir}")
+        logger.info(f"[URL Quick] Analyzing URL: {video_url}")
+
+        # Import downloader
+        from .downloader import VideoDownloader
+        from .analyzer import RecipeAnalyzer
+
+        # Download video with yt-dlp to get metadata and thumbnail
+        downloader = VideoDownloader(output_dir=temp_dir)
+
+        # Use yt-dlp to extract thumbnail URL from metadata (without downloading video)
+        import yt_dlp
+
+        ydl_opts = {
+            'skip_download': True,  # Don't download video
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,  # Get full metadata including thumbnails
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"[URL Quick] Extracting metadata...")
+            info = ydl.extract_info(video_url, download=False)
+
+            # Get best thumbnail
+            thumbnails = info.get('thumbnails', [])
+            if not thumbnails:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No thumbnail available for this video"
+                )
+
+            # Select highest quality thumbnail
+            thumbnail = max(thumbnails, key=lambda t: t.get('preference', 0) or 0)
+            thumbnail_url_raw = thumbnail['url']
+
+            logger.info(f"[URL Quick] Found thumbnail: {thumbnail_url_raw[:100]}...")
+
+        # Download thumbnail image for analysis
+        import requests
+        thumbnail_path = os.path.join(temp_dir, 'thumbnail.jpg')
+
+        logger.info(f"[URL Quick] Downloading thumbnail...")
+        response = requests.get(thumbnail_url_raw, timeout=10)
+        response.raise_for_status()
+
+        with open(thumbnail_path, 'wb') as f:
+            f.write(response.content)
+
+        logger.info(f"[URL Quick] Analyzing thumbnail with Gemini...")
+
+        # Create analyzer instance
+        analyzer = RecipeAnalyzer()
+
+        # Perform quick analysis (name only)
+        result = analyzer.analyze_thumbnail_quick(thumbnail_path)
+
+        logger.info(f"[URL Quick] Extracted name: {result['name']}")
+
+        # Upload thumbnail to R2
+        thumbnail_url = _upload_thumbnail(thumbnail_path)
+
+        # Return minimal response
+        return {
+            'name': result['name'],
+            'thumbnail_url': thumbnail_url,
+            'metadata': {
+                'llm_usage': result.get('usage_metadata', {})
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[URL Quick] Failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Quick URL analysis failed: {str(e)}"
+        )
+
+    finally:
+        # Cleanup temp files
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"[URL Quick] Cleaned up temp dir: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup {temp_dir}: {e}")
+
+
 # ============================================================================
 # Active Mode Worker Logic
 # ============================================================================
